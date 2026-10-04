@@ -20,6 +20,7 @@ export function SessionScreen({ navigation, route }: NativeStackScreenProps<Sess
   const { sessions, loadSamples, renameSession } = useData();
   const run = sessions.find((s) => s.id === route.params.id);
   const [samples, setSamples] = useState<Sample[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<'graph' | 'table'>('graph');
   const [sensor, setSensor] = useState<SensorKey>('temp');
   const [editing, setEditing] = useState(false);
@@ -28,7 +29,10 @@ export function SessionScreen({ navigation, route }: NativeStackScreenProps<Sess
 
   useEffect(() => {
     let alive = true;
-    loadSamples(route.params.id).then((s) => alive && setSamples(s));
+    setLoadError(null);
+    loadSamples(route.params.id)
+      .then((s) => alive && setSamples(s))
+      .catch((e) => alive && setLoadError(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
     };
@@ -124,7 +128,11 @@ export function SessionScreen({ navigation, route }: NativeStackScreenProps<Sess
               <SensorChips value={sensor} onChange={setSensor} />
             </View>
             <View style={styles.panel}>
-              {samples && <SensorPanel samples={samples} sensor={sensor} view={view} duration={run.durationSec} />}
+              {samples ? (
+                <SensorPanel samples={samples} sensor={sensor} view={view} duration={run.durationSec} />
+              ) : (
+                <Text style={type.meta}>{loadError ? `Couldn't load the readings: ${loadError}` : 'Loading readings…'}</Text>
+              )}
             </View>
           </View>
         </ScrollView>

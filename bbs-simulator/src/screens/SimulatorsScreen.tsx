@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Icon, Screen, useTopInset } from '../components/basics';
 import { ActiveRunBanner } from '../components/ActiveRunBanner';
+import { DeviceStatusLine, UnrecordedRunCard } from '../components/DeviceStatus';
 import { SwipeToDelete } from '../components/SwipeToDelete';
 import { TextSizeButton } from '../components/controls';
 import { MiniBreathWave } from '../components/waves';
@@ -29,7 +30,9 @@ export function SimulatorsScreen({ navigation }: NativeStackScreenProps<HomeStac
           </Text>
           <TextSizeButton />
         </View>
+        <DeviceStatusLine style={styles.status} />
         <ActiveRunBanner />
+        <UnrecordedRunCard />
         <View style={styles.list}>
           {simulators.map((sim) => {
             const running = active?.simulator.id === sim.id;
@@ -46,7 +49,7 @@ export function SimulatorsScreen({ navigation }: NativeStackScreenProps<HomeStac
                   setOpenId(null);
                   deleteSimulator(sim.id);
                 }}
-                label={`${sim.name}: ${sim.tidalVolume} millilitres, ${sim.respiratoryRate} breaths per minute, I to E ${formatRatio(sim.ieRatio)}${running ? ', recording' : ''}`}
+                label={`${sim.name}: ${sim.respiratoryRate} breaths per minute, blower ${sim.duty} percent, I to E ${formatRatio(sim.ieRatio)}${running ? ', recording' : ''}`}
               >
                 <SimulatorCard sim={sim} running={running} />
               </SwipeToDelete>
@@ -81,8 +84,8 @@ function SimulatorCard({ sim, running }: { sim: Simulator; running: boolean }) {
         </View>
       </View>
       <View style={styles.stats}>
-        <Stat value={`${sim.tidalVolume} mL`} label="tidal vol." />
         <Stat value={`${sim.respiratoryRate} bpm`} label="resp. rate" />
+        <Stat value={`${sim.duty} %`} label="blower" />
         <Stat value={formatRatio(sim.ieRatio)} label="I:E ratio" />
       </View>
     </View>
@@ -100,6 +103,7 @@ function Stat({ value, label }: { value: string; label: string }) {
 
 const styles = themedStyles(() => ({
   content: { paddingBottom: 70 },
+  status: { marginLeft: 37, marginRight: 24, marginTop: 6 },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingLeft: 37, paddingRight: 24 },
   list: { marginTop: 26, marginHorizontal: 24, gap: 18 },
   cardClip: { borderRadius: 30 },

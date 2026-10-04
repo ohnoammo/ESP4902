@@ -44,6 +44,10 @@ const dark = {
   gridLine: 'rgba(152,160,184,0.22)', // faint version of `muted`, for graph gridlines
   navBar: '#FFFFFF',
   navLabel: '#CB5A03',
+  // Demo-mode banner: loud on purpose, identical in both themes.
+  demo: '#F5C24C',
+  onDemo: '#191629',
+  warning: '#F5C24C',
 };
 
 export type Colors = typeof dark;
@@ -91,6 +95,9 @@ const light: Colors = {
   // Inverted nav: navy bar (circles/notch take the page grey, see TabBar navXml).
   navBar: '#191629',
   navLabel: '#ECA269', // the darker Figma orange is too dim on the navy bar
+  demo: '#F5C24C',
+  onDemo: '#191629',
+  warning: '#9A6A00',
 };
 
 export const palettes: Record<Scheme, Colors> = { dark, light };

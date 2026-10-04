@@ -1,11 +1,12 @@
 import { Sample, SessionMeta } from '../types';
 import { formatDuration, formatNumber, formatRatio, formatRunMeta } from './format';
 import { summarize } from './stats';
+import { CO2_WARN_PPM } from './telemetry';
 
 // Rule-based run assistant: matches keywords in the question and answers only from the
 // saved runs' own samples. It never guesses; with no data, it says so.
 
-type Field = Exclude<keyof Sample, 't'>;
+type Field = 'temperature' | 'co2Ppm' | 'humidity' | 'inhaleFan' | 'exhaleFan';
 
 interface Metric {
   field: Field;
@@ -13,18 +14,20 @@ interface Metric {
   unit: string;
   decimals: number;
   match: RegExp;
+  scale?: number; // stored × scale = shown (CO2 is stored in ppm, shown in %)
 }
 
+// What the device measures today. Tidal volume and peak pressure aren't measured yet, so
+// questions about them get that answer instead of a number.
 const METRICS: Metric[] = [
-  { field: 'tidalVolume', name: 'tidal volume', unit: 'mL', decimals: 0, match: /\b(tidal|volume|vt)\b/ },
-  { field: 'pressure', name: 'peak pressure', unit: 'cmH2O', decimals: 1, match: /\b(pressure|cmh2o)\b/ },
   { field: 'temperature', name: 'temperature', unit: '°C', decimals: 1, match: /\b(temp\w*|hot\w*|warm\w*|cold\w*|cool\w*)\b/ },
-  { field: 'co2', name: 'CO2', unit: '%', decimals: 1, match: /\b(co2|carbon)\b/ },
+  { field: 'co2Ppm', name: 'CO2', unit: '%', decimals: 2, match: /\b(co2|carbon)\b/, scale: 1 / 10000 },
   { field: 'humidity', name: 'humidity', unit: '% RH', decimals: 0, match: /\b(humid\w*|moisture)\b/ },
   { field: 'inhaleFan', name: 'inhale fan', unit: 'RPM', decimals: 0, match: /\binhale\b/ },
   { field: 'exhaleFan', name: 'exhale fan', unit: 'RPM', decimals: 0, match: /\bexhale\b/ },
 ];
 const FANS = /\bfans?\b/;
+const UNMEASURED = /\b(tidal|volume|vt|pressure|cmh2o)\b/;
 
 export interface AssistantData {
   runs: SessionMeta[];
@@ -78,50 +81,56 @@ function targetRun(t: string, d: AssistantData): SessionMeta {
 
 function stats(d: AssistantData, run: SessionMeta, m: Metric) {
   const rows = d.samples[run.id] ?? [];
-  return rows.length ? summarize(rows.map((s) => s[m.field])) : null;
+  return rows.length ? summarize(rows.map((s) => s[m.field] * (m.scale ?? 1))) : null;
 }
 
 function summary(d: AssistantData, run: SessionMeta): string {
   const sim = run.simulator;
   const lines = [
-    `${label(run)} ran the ${sim.name} simulator (${sim.tidalVolume} mL, ${sim.respiratoryRate} bpm, I:E ${formatRatio(sim.ieRatio)}).`,
+    `${label(run)} ran the ${sim.name} simulator (${sim.respiratoryRate} bpm, blower ${sim.duty} %, I:E ${formatRatio(sim.ieRatio)}).`,
   ];
   const parts = METRICS.map((m) => {
     const s = stats(d, run, m);
     return s && `${m.name} ${fmt(s.avg, m)}`;
   }).filter(Boolean);
   lines.push(parts.length ? `Averages: ${parts.join(', ')}.` : 'It has no readings saved.');
-  const check = volumeCheck(d, run);
+  const check = co2Check(d, run);
   if (check) lines.push(check);
   return lines.join('\n');
 }
 
-// The one thing a run can be checked against: the tidal volume it was set to deliver.
-function volumeCheck(d: AssistantData, run: SessionMeta): string | null {
-  const m = METRICS[0];
-  const s = stats(d, run, m);
-  if (!s) return null;
-  const target = run.simulator.tidalVolume;
-  const off = ((s.avg - target) / target) * 100;
-  if (Math.abs(off) < 5) return `Tidal volume stayed on target (set ${target} mL, averaged ${fmt(s.avg, m)}).`;
-  return `Tidal volume averaged ${fmt(s.avg, m)}, ${Math.abs(off).toFixed(0)}% ${off > 0 ? 'above' : 'below'} the ${target} mL it was set to.`;
+// The CO2 sensor (MH-Z16) saturates at 50 000 ppm, so readings above 45 000 may be capped.
+function co2Check(d: AssistantData, run: SessionMeta): string | null {
+  const rows = d.samples[run.id] ?? [];
+  const peak = rows.reduce((m, s) => Math.max(m, s.co2PeakPpm), 0);
+  if (peak <= CO2_WARN_PPM) return null;
+  return `CO2 peaked at ${formatNumber(peak / 10000, 2)} %, near the sensor's 5 % limit, so the highest readings may be capped.`;
 }
 
 // Biggest movers between the first and last quarter of the run.
 function unusual(d: AssistantData, run: SessionMeta): string {
   const rows = d.samples[run.id] ?? [];
   if (rows.length < 8) {
-    const check = volumeCheck(d, run);
+    const check = co2Check(d, run);
     return `${label(run)} is too short to spot trends (${rows.length} readings). Record a longer run and ask again.${check ? '\n' + check : ''}`;
   }
   const q = Math.floor(rows.length / 4);
-  const drifts = METRICS.map((m) => {
-    const a = summarize(rows.slice(0, q).map((s) => s[m.field])).avg;
-    const b = summarize(rows.slice(-q).map((s) => s[m.field])).avg;
-    return { m, a, b, pct: a ? ((b - a) / Math.abs(a)) * 100 : 0 };
-  }).filter((x) => Math.abs(x.pct) >= 5);
+  const drift = (name: string, unit: Metric, value: (s: Sample) => number) => {
+    const a = summarize(rows.slice(0, q).map(value)).avg;
+    const b = summarize(rows.slice(-q).map(value)).avg;
+    return { m: { ...unit, name }, a, b, pct: a ? ((b - a) / Math.abs(a)) * 100 : 0 };
+  };
+  // The two fans take turns by phase, so each one's average depends on how many inhale vs
+  // exhale seconds fall in a quarter. Their combined output only moves if the blower does.
+  const fan = METRICS.find((m) => m.field === 'inhaleFan')!;
+  const drifts = [
+    ...METRICS.filter((m) => m.field !== 'inhaleFan' && m.field !== 'exhaleFan').map((m) =>
+      drift(m.name, m, (s) => s[m.field] * (m.scale ?? 1))
+    ),
+    drift('fan output', fan, (s) => s.inhaleFan + s.exhaleFan),
+  ].filter((x) => Math.abs(x.pct) >= 5);
   const lines = [`Checked ${label(run)}.`];
-  const check = volumeCheck(d, run);
+  const check = co2Check(d, run);
   if (check) lines.push(check);
   lines.push(
     drifts.length
@@ -235,6 +244,10 @@ export function reply(question: string, d: AssistantData): string {
   }
 
   const metrics = metricsIn(t);
+
+  if (!metrics.length && UNMEASURED.test(t)) {
+    return 'Tidal volume and peak pressure aren’t measured yet by this device, so I can’t report them. Tidal volume will later be estimated from the fan RPM.';
+  }
 
   if (/\b(compare|comparison|differen\w*|vs|versus)\b/.test(t)) {
     const named = namedRuns(t, d.runs);

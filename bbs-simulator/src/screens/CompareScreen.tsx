@@ -7,7 +7,7 @@ import { SensorChips } from '../components/controls';
 import { LineGraph } from '../components/waves';
 import { SessionsStackParams } from '../navigation/types';
 import { useData } from '../state/DataContext';
-import { sensorByKey } from '../constants/sensors';
+import { sensorByKey, seriesValue } from '../constants/sensors';
 import { fs, colors, font, themedStyles, type } from '../theme';
 import { Sample, SensorKey, SessionMeta } from '../types';
 import { graphSeries, summarize } from '../utils/stats';
@@ -26,11 +26,14 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
   const { ids } = route.params;
   const found = ids.map((id) => sessions.find((s) => s.id === id));
   const [data, setData] = useState<Sample[][] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sensor, setSensor] = useState<SensorKey>('temp');
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    Promise.all(ids.map(loadSamples)).then(setData);
+    Promise.all(ids.map(loadSamples))
+      .then(setData)
+      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
   }, [ids, loadSamples]);
 
   if (found.some((r) => !r)) {
@@ -44,9 +47,9 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
   const runs = found as SessionMeta[];
   const def = sensorByKey(sensor);
   // Fans compare the inhale fan, the series the design uses for single-line views.
-  const field = def.series[0].field;
+  const series = def.series[0];
   const duration = Math.max(...runs.map((r) => r.durationSec));
-  const stats = data?.map((samples) => summarize(samples.map((s) => s[field])));
+  const stats = data?.map((samples) => summarize(samples.map((s) => seriesValue(series, s))));
   const unitLabel = def.key === 'fans' ? 'inhale RPM' : def.unit;
   const fmt = (v: number) => formatNumber(v, def.decimals);
   const signed = (v: number) => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v))}`;
@@ -83,6 +86,7 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
             ))}
           </View>
 
+          {!data && <Text style={type.meta}>{loadError ? `Couldn't load the readings: ${loadError}` : 'Loading readings…'}</Text>}
           {data && (
             <LineGraph
               height={200}
@@ -90,7 +94,7 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
               unit={unitLabel}
               strokeWidth={3.2}
               series={data.map((samples, i) => ({
-                ...graphSeries(samples.map((s) => s.t), samples.map((s) => s[field])),
+                ...graphSeries(samples.map((s) => s.t), samples.map((s) => seriesValue(series, s))),
                 color: compareColors()[i],
               }))}
             />

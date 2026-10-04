@@ -1,28 +1,40 @@
+// A saved preset of what to send the device. The firmware takes only `bpm` (5–40) and
+// `duty` (blower power, 0–100 %); I:E is fixed at 1:1 in the current firmware but kept
+// here so the UI and future firmware can use it.
 export interface Simulator {
   id: string;
   name: string;
-  tidalVolume: number; // mL
-  respiratoryRate: number; // breaths per minute
-  ieRatio: number; // exhale part of 1:X
+  respiratoryRate: number; // breaths per minute, sent as `bpm`
+  duty: number; // blower power %, sent as `duty`
+  ieRatio: number; // exhale part of 1:X; always 1 for now
 }
 
-// One reading per second while a run records.
+export type Phase = 'inhale' | 'exhale' | 'idle';
+
+// One second of readings (telemetry arrives at 10 Hz and is averaged per second for
+// display). Tidal volume and peak pressure aren't measured yet: they stay null until the
+// firmware (or an RPM-based estimate) provides them.
 export interface Sample {
-  t: number; // seconds since start
-  tidalVolume: number; // mL, last completed breath
-  pressure: number; // cmH2O, peak of last breath
+  t: number; // seconds since the run started
+  tidalVolume: number | null; // mL
+  pressure: number | null; // cmH2O
   temperature: number; // °C
-  co2: number; // %
+  co2Ppm: number; // ppm, average over the second
+  co2PeakPpm: number; // ppm, highest raw reading in the second (saturation check)
   humidity: number; // % RH
   inhaleFan: number; // RPM
   exhaleFan: number; // RPM
+  phase: Phase; // phase at the end of the second
 }
+
+export type AppMode = 'live' | 'demo';
 
 export interface SessionMeta {
   id: string;
   name: string;
   simulator: Omit<Simulator, 'id'>;
-  startedAt: number; // epoch ms
+  deviceId: string;
+  startedAt: number; // epoch ms (device sampled_at)
   durationSec: number;
   folderId: string | null;
 }

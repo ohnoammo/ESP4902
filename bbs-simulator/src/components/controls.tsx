@@ -24,6 +24,7 @@ export function Slider({
   step,
   onChange,
   accessibilityLabel,
+  disabled,
 }: {
   value: number;
   min: number;
@@ -31,6 +32,7 @@ export function Slider({
   step: number;
   onChange: (v: number) => void;
   accessibilityLabel: string;
+  disabled?: boolean; // shown dimmed and ignores input
 }) {
   const [width, setWidth] = useState(0);
   const grabX = useRef(0);
@@ -59,11 +61,13 @@ export function Slider({
   ).current;
 
   const frac = (value - min) / (max - min);
-  const nudge = (dir: 1 | -1) => onChange(Math.min(max, Math.max(min, value + dir * step)));
+  const nudge = (dir: 1 | -1) => !disabled && onChange(Math.min(max, Math.max(min, value + dir * step)));
 
   return (
     <View
-      style={sliderStyles.hit}
+      style={[sliderStyles.hit, disabled && sliderStyles.disabled]}
+      pointerEvents={disabled ? 'none' : 'auto'}
+      accessibilityState={{ disabled: !!disabled }}
       onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
       accessible
       accessibilityRole="adjustable"
@@ -71,7 +75,7 @@ export function Slider({
       accessibilityValue={{ min, max, now: value }}
       accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
       onAccessibilityAction={(e) => nudge(e.nativeEvent.actionName === 'increment' ? 1 : -1)}
-      {...responder.panHandlers}
+      {...(disabled ? {} : responder.panHandlers)}
     >
       <View pointerEvents="none" style={sliderStyles.track}>
         <View style={[sliderStyles.fill, { width: frac * width }]} />
@@ -85,6 +89,7 @@ export function Slider({
 
 const sliderStyles = themedStyles(() => ({
   hit: { height: 32, justifyContent: 'center', cursor: 'pointer' } as any,
+  disabled: { opacity: 0.35, cursor: 'default' } as any,
   track: { height: 6, borderRadius: 3, backgroundColor: colors.sliderTrack, overflow: 'hidden' },
   fill: { height: 6, backgroundColor: colors.accent },
   // Soft shadow keeps the thumb visible against the pale light-mode track.

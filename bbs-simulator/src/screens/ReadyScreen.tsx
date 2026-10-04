@@ -1,23 +1,45 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { BackButton, Icon, PrimaryButton, Screen, useTopInset } from '../components/basics';
+import { BackButton, PrimaryButton, Screen, useTopInset } from '../components/basics';
 import { BreathWave } from '../components/waves';
+import { DeviceStatusLine, UnrecordedRunCard } from '../components/DeviceStatus';
 import { HomeStackParams } from '../navigation/types';
 import { useData } from '../state/DataContext';
-import { useRun } from '../state/RunContext';
-import { useConnection } from '../state/ConnectionContext';
+import { CommandOutcome, useRun } from '../state/RunContext';
+import { useDevice } from '../state/DeviceContext';
 import { fs, colors, font, heroSize, themedStyles, type } from '../theme';
 import { formatRatio } from '../utils/format';
-import * as svgs from '../assets/svgs';
+
+// What to tell the user about the latest Start, by its outcome.
+const START_MESSAGES: Partial<Record<CommandOutcome, string>> = {
+  pending: 'Start sent. Waiting for the device…',
+  done: 'The device confirmed Start. Waiting for it to begin breathing…',
+  'no-response': 'No response from device.',
+  error: 'The device didn’t recognise the command.',
+  expired: 'Start expired, device was unreachable. Press again.',
+};
 
 export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeStackParams, 'Ready'>) {
   const top = useTopInset();
   const { simulators } = useData();
-  const { active, start } = useRun();
-  const { status } = useConnection();
-  const [starting, setStarting] = useState(false);
+  const { active, pendingStart, startOutcome, startError, start } = useRun();
+  const { online, running } = useDevice();
   const sim = simulators.find((s) => s.id === route.params.simulatorId);
+
+  const thisRunning = !!sim && active?.simulator.id === sim.id;
+  const startedHere = !!sim && pendingStart?.simulator?.id === sim.id;
+
+  // Recording begins when the telemetry shows the device breathing (the pending start is
+  // cleared at that moment); if the start came from this screen, go to the live view.
+  const startedFromHere = useRef(false);
+  useEffect(() => {
+    if (startedHere) startedFromHere.current = true;
+    if (thisRunning && startedFromHere.current) {
+      startedFromHere.current = false;
+      navigation.navigate('Running');
+    }
+  }, [thisRunning, startedHere, navigation]);
 
   if (!sim) {
     return (
@@ -28,19 +50,25 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
     );
   }
 
-  const thisRunning = active?.simulator.id === sim.id;
   const otherRunning = !!active && !thisRunning;
-
-  const onStart = async () => {
-    if (thisRunning) return navigation.navigate('Running');
-    setStarting(true);
-    try {
-      await start(sim);
-      navigation.navigate('Running');
-    } finally {
-      setStarting(false);
-    }
-  };
+  const starting = !!pendingStart;
+  // Start is disabled while a start is pending, while the device is offline, or while it
+  // is already running (Stop for that is on the card above).
+  const label = thisRunning
+    ? 'View live run'
+    : otherRunning
+      ? `${active!.simulator.name} is recording`
+      : starting
+        ? 'Starting…'
+        : !online
+          ? 'Device offline'
+          : running
+            ? 'Device is already running'
+            : 'Start';
+  const disabled = !thisRunning && (otherRunning || starting || !online || running);
+  const showOutcome = startOutcome && (startedHere || (startOutcome !== 'pending' && startOutcome !== 'done'));
+  const message = startError ?? (showOutcome ? START_MESSAGES[startOutcome!] : null);
+  const problem = !!startError || startOutcome === 'expired' || startOutcome === 'error' || startOutcome === 'no-response';
 
   return (
     <Screen>
@@ -50,11 +78,9 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
           <Text style={[type.hero, styles.title, { fontSize: heroSize(sim.name) }]} numberOfLines={2} accessibilityRole="header">
             {sim.name}
           </Text>
-          <View style={styles.status}>
-            <Icon xml={svgs.dotConnected} size={10} />
-            <Text style={styles.statusText}>{status === 'connected' ? 'Connected' : 'Offline'}</Text>
-          </View>
         </View>
+        <DeviceStatusLine style={styles.status} />
+        <UnrecordedRunCard />
 
         <View style={styles.wave}>
           <BreathWave pattern={sim} height={124} />
@@ -62,27 +88,35 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
         <Text style={styles.preview}>Preview of this pattern</Text>
 
         <View style={styles.params}>
-          <ParamRow label="Tidal volume" value={String(sim.tidalVolume)} unit="mL" />
           <ParamRow label="Respiratory rate" value={String(sim.respiratoryRate)} unit="bpm" />
-          <ParamRow label="I:E ratio" value={formatRatio(sim.ieRatio)} />
+          <ParamRow label="Blower power" value={String(sim.duty)} unit="%" />
+          <ParamRow label="I:E ratio" value={formatRatio(sim.ieRatio)} note="Fixed 1:1 in current firmware" />
         </View>
 
         <PrimaryButton
-          label={thisRunning ? 'View live run' : otherRunning ? `${active!.simulator.name} is recording` : 'Start'}
-          onPress={onStart}
-          disabled={otherRunning}
-          loading={starting}
+          label={label}
+          onPress={() => (thisRunning ? navigation.navigate('Running') : start(sim))}
+          disabled={disabled}
+          loading={starting && !thisRunning}
           style={styles.start}
         />
+        {message && (
+          <Text style={[styles.message, problem && styles.problem]} accessibilityLiveRegion="polite">
+            {message}
+          </Text>
+        )}
       </ScrollView>
     </Screen>
   );
 }
 
-function ParamRow({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function ParamRow({ label, value, unit, note }: { label: string; value: string; unit?: string; note?: string }) {
   return (
-    <View style={styles.param} accessible accessibilityLabel={`${label} ${value} ${unit ?? ''}`}>
-      <Text style={styles.paramLabel}>{label}</Text>
+    <View style={styles.param} accessible accessibilityLabel={`${label} ${value} ${unit ?? ''} ${note ?? ''}`}>
+      <View style={styles.paramLabelBox}>
+        <Text style={styles.paramLabel}>{label}</Text>
+        {note && <Text style={styles.paramNote}>{note}</Text>}
+      </View>
       <Text style={styles.paramValue} numberOfLines={1}>
         {value}
       </Text>
@@ -97,13 +131,13 @@ const styles = themedStyles(() => ({
   content: { paddingBottom: 60 },
   titleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 11, paddingLeft: 37, paddingRight: 34 },
   title: { flex: 1 },
-  status: { flexDirection: 'row', alignItems: 'center', gap: 13 },
-  statusText: { ...font.bold, fontSize: fs(16), color: colors.success },
-  wave: { marginTop: 44 },
+  status: { marginLeft: 37, marginRight: 24, marginTop: 6 },
+  wave: { marginTop: 30 },
   preview: { ...font.bold, fontSize: fs(14), color: colors.muted, marginLeft: 37, marginTop: 15 },
   params: { marginTop: 31, marginHorizontal: 24, gap: 11 },
   param: {
-    height: 74,
+    minHeight: 74,
+    paddingVertical: 10,
     borderRadius: 26,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -111,9 +145,14 @@ const styles = themedStyles(() => ({
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: 26,
+    paddingRight: 20,
   },
-  paramLabel: { ...font.bold, fontSize: fs(20), color: colors.strong, width: 188 },
-  paramValue: { ...font.regular, fontSize: fs(20), color: colors.text, minWidth: 50 },
+  paramLabelBox: { flex: 1 },
+  paramLabel: { ...font.bold, fontSize: fs(20), color: colors.strong },
+  paramNote: { ...font.regular, fontSize: fs(13), color: colors.muted, marginTop: 3 },
+  paramValue: { ...font.regular, fontSize: fs(20), color: colors.text, minWidth: 40, textAlign: 'right' },
   paramUnit: { ...font.regular, fontSize: fs(20), color: colors.text, minWidth: 44, textAlign: 'right' },
   start: { marginTop: 15 },
+  message: { ...font.regular, fontSize: fs(14), lineHeight: fs(20), color: colors.muted, marginHorizontal: 37, marginTop: 12, textAlign: 'center' },
+  problem: { ...font.bold, color: colors.danger },
 }));

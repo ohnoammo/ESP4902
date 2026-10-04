@@ -2,10 +2,11 @@ import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { fs, colors, font, themedStyles } from '../theme';
 import { Sample, SensorKey } from '../types';
-import { sensorByKey } from '../constants/sensors';
+import { sensorByKey, seriesValue } from '../constants/sensors';
 import { graphSeries, summarize } from '../utils/stats';
 import { formatAxis, formatNumber } from '../utils/format';
 import { LineGraph } from './waves';
+import { CO2_WARN_PPM } from '../utils/telemetry';
 
 // Functions, not constants: `colors` changes with the theme.
 const seriesColors = () => [colors.strong, colors.seriesA];
@@ -29,8 +30,15 @@ export function SensorPanel({
     return <Text style={styles.noData}>No readings were recorded for this run.</Text>;
   }
 
+  const co2Saturated = sensor === 'co2' && samples.some((s) => s.co2PeakPpm > CO2_WARN_PPM);
+
   return (
     <View>
+      {co2Saturated && (
+        <Text style={styles.warning}>
+          CO2 went above 4.5 % in this run. The sensor saturates at 5 %, so the highest readings may be capped.
+        </Text>
+      )}
       {view === 'graph' ? (
         <>
           <LineGraph
@@ -38,7 +46,7 @@ export function SensorPanel({
             duration={duration}
             unit={def.unit}
             series={def.series.map((s, i) => ({
-              ...graphSeries(t, samples.map((x) => x[s.field])),
+              ...graphSeries(t, samples.map((x) => seriesValue(s, x))),
               color: seriesColors()[i],
             }))}
           />
@@ -59,7 +67,7 @@ export function SensorPanel({
 
       <View style={[styles.stats, def.series.length > 1 && styles.statsTight]}>
         {def.series.map((s) => {
-          const sum = summarize(samples.map((x) => x[s.field]));
+          const sum = summarize(samples.map((x) => seriesValue(s, x)));
           return (
             <View key={s.field} style={styles.statRow}>
               {(['min', 'avg', 'max'] as const).map((k) => (
@@ -101,7 +109,7 @@ function SensorTable({ samples, sensor }: { samples: Sample[]; sensor: SensorKey
             <Text style={styles.cell}>{formatAxis(r.t)}</Text>
             {def.series.map((s) => (
               <Text key={s.field} style={[styles.cell, styles.num]}>
-                {formatNumber(r[s.field], def.decimals)}
+                {formatNumber(seriesValue(s, r), def.decimals)}
               </Text>
             ))}
           </View>
@@ -112,6 +120,7 @@ function SensorTable({ samples, sensor }: { samples: Sample[]; sensor: SensorKey
 }
 
 const styles = themedStyles(() => ({
+  warning: { ...font.regular, fontSize: fs(13), lineHeight: fs(18), color: colors.text, marginBottom: 12, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: colors.warning },
   noData: { ...font.regular, fontSize: fs(14), color: colors.muted, marginTop: 20 },
   axisText: { ...font.regular, fontSize: fs(14), color: colors.muted },
   legend: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 14 },

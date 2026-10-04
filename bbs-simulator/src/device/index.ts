@@ -1,11 +1,11 @@
-import { CONNECT_TIMEOUT_MS, DEVICE_URL, USE_MOCK_DEVICE } from './config';
-import { createEsp32Device } from './esp32Device';
-import { createMockDevice } from './mockDevice';
-import { Device } from './types';
+import { createDemoBackend } from './demoBackend';
+import { createSupabaseBackend } from './supabaseBackend';
+import { Backend } from './types';
+import { AppMode } from '../types';
 
-// The single device instance the whole app talks to (chosen in config.ts).
-export const device: Device = USE_MOCK_DEVICE
-  ? createMockDevice()
-  : createEsp32Device(DEVICE_URL, CONNECT_TIMEOUT_MS);
+// Live mode talks to the real device through Supabase; demo mode uses the built-in simulation.
+export function createBackend(mode: AppMode): Backend {
+  return mode === 'live' ? createSupabaseBackend() : createDemoBackend();
+}
 
-export type { Device, DeviceInfo, Reading } from './types';
+export * from './types';

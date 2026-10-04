@@ -7,8 +7,7 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web",
-    "fake-esp32": "node tools/fake-esp32.js"
+    "web": "expo start --web"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.15",
@@ -16,6 +15,7 @@
     "@react-navigation/bottom-tabs": "^7.19.2",
     "@react-navigation/native": "^7.4.1",
     "@react-navigation/native-stack": "^7.19.2",
+    "@supabase/supabase-js": "^2.117.2",
     "expo": "~57.0.22",
     "expo-build-properties": "~57.0.22",
     "expo-file-system": "~57.0.7",
@@ -27,12 +27,12 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
+    "react-native-url-polyfill": "^4.0.0",
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@expo/ngrok": "^4.1.3",
     "@types/react": "~19.2.2",
-    "typescript": "~6.0.3",
-    "ws": "^8.22.0"
+    "typescript": "~6.0.3"
   }
 }

@@ -8,28 +8,30 @@ import { HomeStackParams } from '../navigation/types';
 import { useData } from '../state/DataContext';
 import { fs, colors, font, themedStyles, type } from '../theme';
 import { formatRatio } from '../utils/format';
+import { BPM_RANGE, DUTY_RANGE } from '../device';
 
-// Ranges chosen so the Figma example (550 mL / 20 bpm / 1:2) lands exactly where
-// the frame draws each thumb.
+// The ranges the database accepts for a start command (bpm 5–40, duty 0–100), in
+// whole numbers. I:E is fixed at 1:1 by the current firmware, so its control is shown
+// but disabled.
 const RANGES = {
-  tidalVolume: { min: 200, max: 800, step: 10 },
-  respiratoryRate: { min: 8, max: 40, step: 1 },
+  respiratoryRate: { ...BPM_RANGE, step: 1 },
+  duty: { ...DUTY_RANGE, step: 5 },
   ieRatio: { min: 1, max: 4, step: 0.5 },
 };
+const FIXED_IE = 1;
 
 export function NewSimulatorScreen({ navigation }: NativeStackScreenProps<HomeStackParams, 'NewSimulator'>) {
   const top = useTopInset();
   const insets = useSafeAreaInsets();
   const { addSimulator } = useData();
   const [name, setName] = useState('');
-  const [tidalVolume, setTidalVolume] = useState(500);
   const [respiratoryRate, setRespiratoryRate] = useState(15);
-  const [ieRatio, setIeRatio] = useState(2);
+  const [duty, setDuty] = useState(60);
   const valid = name.trim().length > 0;
 
   const save = () => {
     if (!valid) return;
-    addSimulator({ name: name.trim(), tidalVolume, respiratoryRate, ieRatio });
+    addSimulator({ name: name.trim(), respiratoryRate, duty, ieRatio: FIXED_IE });
     navigation.goBack();
   };
 
@@ -58,9 +60,6 @@ export function NewSimulatorScreen({ navigation }: NativeStackScreenProps<HomeSt
             accessibilityLabel="Simulator name"
           />
 
-          <Setting label="Tidal volume" value={`${tidalVolume} mL`}>
-            <Slider {...RANGES.tidalVolume} value={tidalVolume} onChange={setTidalVolume} accessibilityLabel="Tidal volume" />
-          </Setting>
           <Setting label="Respiratory rate" value={`${respiratoryRate} bpm`}>
             <Slider
               {...RANGES.respiratoryRate}
@@ -69,8 +68,11 @@ export function NewSimulatorScreen({ navigation }: NativeStackScreenProps<HomeSt
               accessibilityLabel="Respiratory rate"
             />
           </Setting>
-          <Setting label="I:E ratio" value={formatRatio(ieRatio)}>
-            <Slider {...RANGES.ieRatio} value={ieRatio} onChange={setIeRatio} accessibilityLabel="I to E ratio" />
+          <Setting label="Blower power" value={`${duty} %`}>
+            <Slider {...RANGES.duty} value={duty} onChange={setDuty} accessibilityLabel="Blower power" />
+          </Setting>
+          <Setting label="I:E ratio" value={formatRatio(FIXED_IE)} note="Fixed 1:1 in current firmware">
+            <Slider {...RANGES.ieRatio} value={FIXED_IE} onChange={() => {}} disabled accessibilityLabel="I to E ratio, fixed 1:1 in current firmware" />
           </Setting>
         </ScrollView>
         <PrimaryButton
@@ -84,7 +86,7 @@ export function NewSimulatorScreen({ navigation }: NativeStackScreenProps<HomeSt
   );
 }
 
-function Setting({ label, value, children }: { label: string; value: string; children: React.ReactNode }) {
+function Setting({ label, value, note, children }: { label: string; value: string; note?: string; children: React.ReactNode }) {
   return (
     <View style={styles.setting}>
       <View style={styles.settingHead}>
@@ -92,6 +94,7 @@ function Setting({ label, value, children }: { label: string; value: string; chi
         <Text style={styles.settingValue}>{value}</Text>
       </View>
       {children}
+      {note && <Text style={styles.settingNote}>{note}</Text>}
     </View>
   );
 }
@@ -104,4 +107,5 @@ const styles = themedStyles(() => ({
   settingHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
   settingLabel: { ...font.bold, fontSize: fs(14), color: colors.strong },
   settingValue: { ...font.bold, fontSize: fs(15), color: colors.text },
+  settingNote: { ...font.regular, fontSize: fs(13), color: colors.muted, marginTop: 6 },
 }));

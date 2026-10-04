@@ -84,75 +84,36 @@ export function SineWave({
   );
 }
 
-// Breathing-pattern wave used on Ready (preview) and Running (live). It is the same
-// volume curve the mock device records, drawn over a fixed 8 s window scrolling right-to-left,
-// so a faster respiratory rate visibly packs in more breaths. The y-axis is lung volume in mL
-// (0 at end of exhale, the tidal volume at end of inhale), so the size of each breath is readable.
+// Breathing-pattern preview on the Ready screen: the idealised curve for the chosen rate
+// and I:E, drawn over a fixed 8 s window scrolling right-to-left, so a faster rate visibly
+// packs in more breaths. It shows the settings, not measured data, so it has no y scale.
 export function BreathWave({
   pattern,
   height,
-  startedAt,
-  live,
   windowSec = 8,
 }: {
-  pattern: Pick<Simulator, 'respiratoryRate' | 'ieRatio' | 'tidalVolume'>;
+  pattern: Pick<Simulator, 'respiratoryRate' | 'ieRatio'>;
   height: number;
-  startedAt?: number;
-  // Live mode (Running screen): plot the device's streamed volume readings instead of
-  // the idealised pattern. Points use seconds since `startedAt`.
-  live?: { t: number; v: number }[];
   windowSec?: number;
 }) {
   const now = useFrameClock();
   const { width, onLayout } = useWidth();
-  const t = startedAt ? now - startedAt / 1000 : now;
-  const tv = pattern.tidalVolume;
-  const ticks = [tv, tv / 2, 0];
-  const labels = ticks.map((v) => String(Math.round(v)));
-  const labelRight = 13 + Math.max(...labels.map((l) => l.length), 2) * 7.5;
-  const padLeft = labelRight + 10;
-  const padTop = 22; // unit label sits above the top tick
-  const padBottom = 5;
-  const yScale = (v: number) => padTop + (1 - v) * (height - padTop - padBottom);
-  const plotW = Math.max(1, width - padLeft);
+  const padX = 37;
+  const padY = 6;
+  const plotW = Math.max(1, width - padX * 2);
   let d = '';
-  if (live) {
-    const from = t - windowSec;
-    for (const p of live) {
-      if (p.t < from - 0.2) continue;
-      const x = padLeft + ((p.t - from) / windowSec) * plotW;
-      const v = Math.min(1.1, Math.max(-0.05, p.v / tv)); // keep overshoot on-screen
-      d += `${d ? 'L' : 'M'}${x.toFixed(1)} ${yScale(v).toFixed(1)}`;
-    }
-  } else {
-    for (let x = 0; x <= plotW; x += 3) {
-      const v = volumeAt(pattern, t - windowSec + (x / plotW) * windowSec);
-      d += `${d ? 'L' : 'M'}${(padLeft + x).toFixed(1)} ${yScale(v).toFixed(1)}`;
-    }
+  for (let x = 0; x <= plotW; x += 3) {
+    const v = volumeAt(pattern, now - windowSec + (x / plotW) * windowSec);
+    d += `${d ? 'L' : 'M'}${(padX + x).toFixed(1)} ${(padY + (1 - v) * (height - padY * 2)).toFixed(1)}`;
   }
-  const axisText = { fill: colors.muted, fontSize: fs(12), fontFamily: font.regular.fontFamily };
   return (
     <View
       style={{ height }}
       onLayout={onLayout}
       accessible
-      accessibilityLabel={`Breathing waveform, 0 to ${tv} millilitres, ${pattern.respiratoryRate} breaths per minute`}
+      accessibilityLabel={`Breathing pattern preview, ${pattern.respiratoryRate} breaths per minute`}
     >
       <Svg width={width} height={height}>
-        <SvgText x={labelRight} y={11} textAnchor="end" {...axisText}>
-          mL
-        </SvgText>
-        {ticks.map((v, i) => {
-          const y = yScale(v / tv);
-          return (
-            <React.Fragment key={i}>
-              <Line x1={padLeft} x2={width} y1={y} y2={y} stroke={colors.gridLine} strokeWidth={1} strokeDasharray="3 4" />
-              <SvgText x={labelRight} y={y + 4} textAnchor="end" {...axisText}>
-                {labels[i]}
-              </SvgText>
-            </React.Fragment>
-          );
-        })}
         <Path d={d} stroke={colors.strong} strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" fill="none" />
       </Svg>
     </View>
@@ -213,12 +174,14 @@ export function LineGraph({
   height,
   unit,
   strokeWidth = 3.5,
+  xLabels,
 }: {
   series: GraphSeries[];
   duration: number;
   height: number;
   unit: string;
   strokeWidth?: number;
+  xLabels?: [string, string]; // default "0:00" and the duration
 }) {
   const { width, onLayout } = useWidth(330);
   const all = series.flatMap((s) => s.v);
@@ -250,7 +213,7 @@ export function LineGraph({
           {unit}
         </SvgText>
         <SvgText x={padLeft} y={height - 14} fill={colors.muted} fontSize={fs(12)} fontFamily={font.regular.fontFamily}>
-          0:00
+          {xLabels?.[0] ?? '0:00'}
         </SvgText>
         <SvgText
           x={width - padRight}
@@ -260,7 +223,7 @@ export function LineGraph({
           textAnchor="end"
           fontFamily={font.regular.fontFamily}
         >
-          {formatAxis(duration)}
+          {xLabels?.[1] ?? formatAxis(duration)}
         </SvgText>
         {ticks.map((v, i) => {
           const y = yScale(v);

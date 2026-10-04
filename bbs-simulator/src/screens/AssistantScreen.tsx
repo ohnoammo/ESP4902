@@ -28,6 +28,7 @@ export function AssistantScreen({ navigation, route }: NativeStackScreenProps<Se
   const focusId = route.params?.runId;
   const focus = sessions.find((s) => s.id === focusId);
   const [samples, setSamples] = useState<Record<string, Sample[]> | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const historyKey = focusId ?? 'all';
   const greeting: Message = {
@@ -44,9 +45,9 @@ export function AssistantScreen({ navigation, route }: NativeStackScreenProps<Se
 
   useEffect(() => {
     let alive = true;
-    Promise.all(sessions.map((s) => loadSamples(s.id).then((rows) => [s.id, rows] as const))).then(
-      (pairs) => alive && setSamples(Object.fromEntries(pairs))
-    );
+    Promise.all(sessions.map((s) => loadSamples(s.id).then((rows) => [s.id, rows] as const)))
+      .then((pairs) => alive && setSamples(Object.fromEntries(pairs)))
+      .catch((e) => alive && setLoadError(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
     };
@@ -95,7 +96,9 @@ export function AssistantScreen({ navigation, route }: NativeStackScreenProps<Se
               </Text>
             </View>
           ))}
-          {!samples && <Text style={[type.meta, styles.loading]}>Loading your runs…</Text>}
+          {!samples && (
+            <Text style={[type.meta, styles.loading]}>{loadError ? `Couldn't load your runs: ${loadError}` : 'Loading your runs…'}</Text>
+          )}
         </ScrollView>
 
         <ScrollView

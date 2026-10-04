@@ -1,171 +1,91 @@
-# Connecting the ESP32 to the app
+# Device integration (ESP4902 Supabase project)
 
-The app talks to the microcontroller over a **WebSocket** using small **JSON** messages.
-Everything device-related lives in `src/device/`; you shouldn't need to touch any screen code.
+The app never talks to the ESP32 directly. The device and the app meet in the ESP4902 Supabase
+project (Singapore region): the device writes telemetry and heartbeats and acknowledges
+commands; the app reads those over Realtime and inserts commands.
 
-## 1. Run the app
+## Connection
 
-Requires Node.js 20+ and the **Expo Go** app on your phone.
+- `.env` (copy `.env.example`): `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
+  Use the **publishable** key only, never the secret key. `.env` is git-ignored.
+- Client: `@supabase/supabase-js`, anon role, no sign-in (`src/lib/supabase.ts`).
+- Updates arrive via Realtime (`postgres_changes`), not polling. The app subscribes first, then
+  loads history, so no row is missed between the two (duplicates are dropped by id).
+- The app does not change the schema, policies or constraints.
 
-```bash
-npm install
-npx expo start --tunnel
-```
+## Tables (RLS on, anon allowed)
 
-Scan the QR code (Android: from inside Expo Go; iPhone: Camera app). `--tunnel` avoids Wi-Fi/firewall
-issues; drop it if phone and computer are on the same network. Press `w` to run it in a browser instead.
+| Table | Columns the app uses | App access |
+| --- | --- | --- |
+| `telemetry` | `id`, `sampled_at`, `device_id` (`'sim01'`), `rpm_inhale`, `rpm_exhale`, `co2_ppm`, `temp_c`, `rh_pct`, `phase` (`inhale`/`exhale`/`idle`) | read |
+| `device_status` | `device_id` (pk), `last_seen`, `firmware`, `wifi_rssi` | read |
+| `commands` | `id`, `created_at`, `device_id`, `command`, `params` (jsonb), `status`, `acked_at` | read, insert |
 
-Out of the box the app uses a **built-in simulated device**, so it works with no hardware.
+## Telemetry
 
-## 2. Switch to the real device
+- Sampled every 100 ms and uploaded in batches (~10 rows/s sharing one `created_at`; up to 50
+  after an outage). **Always plot against `sampled_at`, never `created_at`.**
+- On connect the app fetches the last 60 s by `sampled_at` (plus the newest row, for the current
+  phase), then subscribes to inserts. It keeps a 60 s rolling buffer and re-renders ~3×/s.
+- Display: 1 s averages; CO2 handled in ppm and shown in % (`ppm / 10000`), with a warning above
+  45 000 ppm (the MH-Z16 saturates at 50 000). Tidal volume and peak pressure are not reported
+  yet; the app shows "Not measured yet" and keeps room for them in its data model.
+- Times are shown in Asia/Singapore.
 
-Edit `src/device/config.ts`:
+## Device state (read from the device, never inferred from commands)
 
-```ts
-export const USE_MOCK_DEVICE = false;
-export const DEVICE_URL = 'ws://192.168.4.1:81'; // the ESP32's address + port
-```
+- **Online** = `device_status.last_seen` within the last 15 s (heartbeat every 5 s).
+- **Running** = the newest telemetry row's `phase` is not `idle` (and that row is under 15 s old;
+  older than that, the state is shown as unknown). A `start` marked `done` does **not** mean it is
+  still running: the device failsafe stops it ~10 s after a network loss.
 
-- `192.168.4.1` is the ESP32's default IP when it runs its own access point (the phone joins the ESP32's Wi-Fi).
-- If the ESP32 joins an existing Wi-Fi instead, use the IP it prints on Serial. Phone and ESP32 must be on the same network.
-- Note: with `--tunnel`, the *app code* is delivered over the internet, but the WebSocket still goes straight
-  from the phone to the ESP32, so the phone must be able to reach the ESP32's IP.
+## Commands
 
-## 3. The protocol
+The app inserts only:
 
-All messages are JSON text frames.
-
-### App → ESP32
-
-| Message | When |
-| --- | --- |
-| `{"type":"hello"}` | Right after connecting. **Must be answered with `info`** (below) within 6 s or the app shows "Couldn't reach your simulator". |
-| `{"type":"start","tidalVolume":500,"respiratoryRate":15,"ieRatio":2}` | User taps Start. Units: mL, breaths/min, and I:E as 1:`ieRatio`. Start the blower and begin streaming readings. |
-| `{"type":"stop"}` | User taps Stop. Stop the blower and stop streaming. |
-
-### ESP32 → App
-
-| Message | Notes |
-| --- | --- |
-| `{"type":"info","name":"BBS-ESP32"}` | Reply to `hello`. `name` is shown in Settings. |
-| `{"type":"reading", ...fields}` | Any subset of the fields below. The app keeps the latest value of each. |
-
-**Reading fields** (all numbers, all optional):
-
-| Field | Unit | Suggested rate | Used for |
-| --- | --- | --- | --- |
-| `volume` | mL | **~20 per second** | The live breathing waveform (instantaneous lung volume, 0 = fully exhaled). |
-| `tidalVolume` | mL | once per breath or 1/s | "mL" reading on the live screen; recorded. |
-| `pressure` | cmH2O | once per breath or 1/s | "cmH2O" reading (peak of the last breath); recorded. |
-| `temperature` | °C | 1/s | Sensors screen; recorded. |
-| `co2` | % | 1/s | Sensors screen; recorded. |
-| `humidity` | % RH | 1/s | Sensors screen; recorded. |
-| `inhaleFan` | RPM | 1/s | Sensors screen; recorded. |
-| `exhaleFan` | RPM | 1/s | Sensors screen; recorded. |
-
-Example stream:
 ```json
-{"type":"reading","volume":312.5}
-{"type":"reading","volume":318.9}
-{"type":"reading","tidalVolume":498,"pressure":2.1,"temperature":34.2,"co2":4.1,"humidity":92,"inhaleFan":1820,"exhaleFan":1240}
+{ "command": "start", "params": { "bpm": 15, "duty": 60 } }
+{ "command": "stop",  "params": {} }
 ```
 
-- The app records **one sample per second** using the latest value of each field, and recording starts once the
-  first non-`volume` reading arrives. A field that is never sent is recorded as `0`.
-- Unknown fields and non-JSON text (e.g. debug prints) are ignored.
-- If the connection drops mid-run, the app saves what it has recorded and shows the device as offline.
+- `device_id` and `status` come from the database defaults.
+- The database accepts only `start`/`stop`, `bpm` 5–40 and `duty` 0–100. Missing values are
+  allowed by the database and the firmware keeps its last used values, so the app **always sends
+  both, as integers**. The UI validates the same ranges and shows database errors verbatim.
+- `duty` is blower power (0–100 %), not I:E. I:E is fixed at 1:1 in the current firmware; the UI
+  shows it disabled.
+- Status lifecycle, watched via Realtime: `pending` → `done` (acknowledged) | `error` (not
+  recognised) | `expired` (a start that arrived > 5 s late; the device was offline). Still pending
+  after ~10 s → "No response from device" (the row is re-read once in case an update was missed).
+  `expired` can arrive later than that, once the device is back online.
+- Start is disabled while a start is pending or the device is offline. **Stop is never disabled.**
 
-## 4. Test without hardware: the fake ESP32
+## Runs
 
-`tools/fake-esp32.js` speaks exactly this protocol and logs every message:
+A run is the stretch between the device starting and stopping:
 
-```bash
-PORT=8765 npm run fake-esp32
-```
-(On Windows PowerShell: `$env:PORT=8765; npm run fake-esp32`.)
+1. Start inserts a `start` command; recording begins at the first non-idle row.
+2. It ends when a row reports `idle` (the end time is that row's `sampled_at`), or when the user
+   presses Stop (a `stop` command is sent and the recording ends at that moment).
 
-Then set `USE_MOCK_DEVICE = false` and `DEVICE_URL = 'ws://<your computer's IP>:8765'`
-(or `ws://localhost:8765` when running the app in a browser with `w`).
+Live runs keep only their time range and settings (on the phone for now; a Supabase runs table
+is proposed, not created) and fetch their readings from `telemetry` when opened. Demo runs are
+stored on the phone, under separate keys, and never listed with real runs.
 
-## 5. Example ESP32 sketch (Arduino)
+## Demo mode
 
-Libraries (Arduino Library Manager): **WebSockets** by Markus Sattler, **ArduinoJson** by Benoit Blanchon.
-Replace the marked lines with your real sensor reads and blower control.
+`src/device/demoBackend.ts` imitates the device for testing without hardware: rows every 100 ms
+delivered in batches of 10 per second, a heartbeat every 5 s, commands acknowledged after ~0.5 s,
+I:E 1:1, and only the active phase's fan spinning (~70 RPM per % of blower power, as measured on the
+rig). Temperature, humidity and CO2 are random within the test firmware's ranges. Every screen
+shows a "DEMO · simulated data" banner.
 
-```cpp
-#include <WiFi.h>
-#include <WebSocketsServer.h>
-#include <ArduinoJson.h>
+## Files
 
-WebSocketsServer ws(81);
-bool running = false;
-float tidalVolume = 500, respiratoryRate = 15, ieRatio = 2;
-unsigned long startedAt = 0, lastVolume = 0, lastSensors = 0;
-
-void sendJson(uint8_t client, JsonDocument &doc) {
-  String out; serializeJson(doc, out); ws.sendTXT(client, out);
-}
-
-void onEvent(uint8_t client, WStype_t type, uint8_t *payload, size_t len) {
-  if (type == WStype_DISCONNECTED) { running = false; /* stop blower */ return; }
-  if (type != WStype_TEXT) return;
-  JsonDocument msg;
-  if (deserializeJson(msg, payload, len)) return;
-  const char *t = msg["type"];
-  if (!strcmp(t, "hello")) {
-    JsonDocument r; r["type"] = "info"; r["name"] = "BBS-ESP32"; sendJson(client, r);
-  } else if (!strcmp(t, "start")) {
-    tidalVolume = msg["tidalVolume"]; respiratoryRate = msg["respiratoryRate"]; ieRatio = msg["ieRatio"];
-    startedAt = millis(); running = true;
-    // TODO: start the blower with these parameters
-  } else if (!strcmp(t, "stop")) {
-    running = false;
-    // TODO: stop the blower
-  }
-}
-
-void setup() {
-  Serial.begin(115200);
-  WiFi.softAP("BBS-Simulator", "breathe123");     // phone joins this network
-  Serial.println(WiFi.softAPIP());                  // 192.168.4.1
-  ws.begin(); ws.onEvent(onEvent);
-}
-
-void loop() {
-  ws.loop();
-  if (!running) return;
-  unsigned long now = millis();
-
-  if (now - lastVolume >= 50) {                     // 20 Hz
-    lastVolume = now;
-    JsonDocument r; r["type"] = "reading";
-    r["volume"] = 0;                                 // TODO: instantaneous volume in mL
-    String out; serializeJson(r, out); ws.broadcastTXT(out);
-  }
-  if (now - lastSensors >= 1000) {                  // 1 Hz
-    lastSensors = now;
-    JsonDocument r; r["type"] = "reading";
-    r["tidalVolume"] = 0;   // TODO
-    r["pressure"]    = 0;   // TODO cmH2O
-    r["temperature"] = 0;   // TODO °C
-    r["co2"]         = 0;   // TODO %
-    r["humidity"]    = 0;   // TODO % RH
-    r["inhaleFan"]   = 0;   // TODO RPM
-    r["exhaleFan"]   = 0;   // TODO RPM
-    String out; serializeJson(r, out); ws.broadcastTXT(out);
-  }
-}
-```
-
-## 6. Where the code is
-
-| File | What |
+| File | What it does |
 | --- | --- |
-| `src/device/config.ts` | Mock/real switch, ESP32 address, timeout. |
-| `src/device/types.ts` | The `Device` interface and `Reading` fields. |
-| `src/device/esp32Device.ts` | WebSocket client implementing the protocol above. |
-| `src/device/mockDevice.ts` | Built-in simulator (same message cadence). |
-| `src/state/RunContext.tsx` | Turns readings into recorded 1 s samples + the live waveform buffer. |
-
-Native builds (`eas build`) are already configured to allow plain `ws://` on the local network
-(`app.json`: Android cleartext traffic, iOS local-network permission).
+| `src/device/types.ts` | The contract: row/command types, `DEVICE_ID`, the bpm/duty validation. |
+| `src/device/supabaseBackend.ts` | Realtime subscription, history fetch, command insert, range fetch for runs. |
+| `src/device/demoBackend.ts` | The simulated device. |
+| `src/state/DeviceContext.tsx` | Rolling buffer, online/running state, command tracking. |
+| `src/state/RunContext.tsx` | Run start/stop and saving. |

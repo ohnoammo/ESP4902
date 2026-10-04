@@ -5,16 +5,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinkText, PrimaryButton, Screen, useTopInset } from '../components/basics';
 import { SineWave } from '../components/waves';
 import { RootParams } from '../navigation/types';
-import { useConnection } from '../state/ConnectionContext';
+import { useDevice } from '../state/DeviceContext';
+import { supabaseConfigured } from '../lib/supabase';
+import { AppMode } from '../types';
 import { fs, colors, font, themedStyles } from '../theme';
 
 // Welcome (frame 01) and Loading (frame 02) are one screen, so the wave never restarts:
 // on Connect it eases into the slower "breathing" loading wave while the title and
-// button cross-fade into the percentage and progress bar.
+// button cross-fade into the percentage and progress bar. Connect goes to the real device
+// through Supabase; "Try demo mode" uses the built-in simulation instead.
 export function WelcomeScreen({ navigation }: NativeStackScreenProps<RootParams, 'Welcome'>) {
   const top = useTopInset();
   const insets = useSafeAreaInsets();
-  const { status, progress, connect, disconnect } = useConnection();
+  const { status, progress, error, mode, connect, disconnect } = useDevice();
   const connecting = status === 'connecting' || status === 'connected';
   const failed = status === 'failed';
   const busy = connecting || failed;
@@ -30,8 +33,8 @@ export function WelcomeScreen({ navigation }: NativeStackScreenProps<RootParams,
     }).start();
   }, [busy, t]);
 
-  const start = async () => {
-    if (await connect()) {
+  const start = async (m: AppMode) => {
+    if (await connect(m)) {
       setTimeout(() => navigation.reset({ index: 0, routes: [{ name: 'Main' }] }), 350);
     }
   };
@@ -62,7 +65,13 @@ export function WelcomeScreen({ navigation }: NativeStackScreenProps<RootParams,
           <Text style={styles.title} accessibilityRole="header">
             Connect your{'\n'}simulator
           </Text>
-          <PrimaryButton label="Connect" onPress={start} style={styles.button} />
+          <PrimaryButton label="Connect" onPress={() => start('live')} style={styles.button} />
+          <View style={styles.demoLink}>
+            <LinkText label="Try demo mode (simulated data)" size={15} color={colors.muted} onPress={() => start('demo')} />
+          </View>
+          {!supabaseConfigured && (
+            <Text style={styles.configHint}>Supabase isn’t set up yet (.env missing), so only demo mode will work.</Text>
+          )}
         </Animated.View>
 
         <Animated.View
@@ -73,10 +82,13 @@ export function WelcomeScreen({ navigation }: NativeStackScreenProps<RootParams,
           accessibilityLiveRegion="polite"
         >
           <Text style={styles.percent}>{failed ? 'Oops' : `${pct}%`}</Text>
-          <Text style={styles.caption}>{failed ? "Couldn't reach your simulator" : 'Setting up your simulator'}</Text>
+          <Text style={styles.caption}>
+            {failed ? "Couldn't reach your simulator" : mode === 'demo' ? 'Starting demo mode' : 'Connecting to your simulator'}
+          </Text>
+          {failed && error && <Text style={styles.error}>{error}</Text>}
           {failed ? (
             <View style={styles.failActions}>
-              <PrimaryButton label="Try again" onPress={start} style={styles.retry} />
+              <PrimaryButton label="Try again" onPress={() => start(mode ?? 'live')} style={styles.retry} />
               <LinkText label="Back" color={colors.muted} onPress={disconnect} />
             </View>
           ) : (
@@ -93,10 +105,13 @@ export function WelcomeScreen({ navigation }: NativeStackScreenProps<RootParams,
 const styles = themedStyles(() => ({
   waveArea: { flex: 1, justifyContent: 'center' },
   // Both states share this slot, stacked; its height fits the taller (failed) state.
-  bottom: { height: 240 },
+  bottom: { height: 300 },
   layer: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   title: { ...font.bold, fontSize: fs(45), lineHeight: fs(69), color: colors.strong, marginLeft: 37 },
   button: { marginTop: 36 },
+  demoLink: { alignItems: 'center', marginTop: 16 },
+  configHint: { ...font.regular, fontSize: fs(13), color: colors.muted, textAlign: 'center', marginTop: 10, marginHorizontal: 37 },
+  error: { ...font.regular, fontSize: fs(13), color: colors.muted, marginTop: 10 },
   loading: { paddingHorizontal: 37, paddingBottom: 18 },
   percent: { ...font.bold, fontSize: fs(56), color: colors.strong },
   caption: { ...font.regular, fontSize: fs(22), color: colors.loadingMuted, marginTop: 20 },

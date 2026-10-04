@@ -4,11 +4,13 @@ import { useNavigation } from '@react-navigation/native';
 import { Icon, PillButton, Screen, useTopInset } from '../components/basics';
 import { Dialog, SegmentedToggle, TextSizeButton } from '../components/controls';
 import { ActiveRunBanner } from '../components/ActiveRunBanner';
-import { useConnection } from '../state/ConnectionContext';
+import { DeviceStatusLine } from '../components/DeviceStatus';
+import { useDevice } from '../state/DeviceContext';
 import { useData } from '../state/DataContext';
 import { useRun } from '../state/RunContext';
 import { ThemeMode, useTheme } from '../state/ThemeContext';
 import { fs, colors, font, TEXT_SCALE_LABELS, TEXT_SCALES, themedStyles, type } from '../theme';
+import { formatTimeSgt } from '../utils/format';
 import * as svgs from '../assets/svgs';
 
 // Settings has no Figma frame; it is built from the same card and dialog pieces.
@@ -18,7 +20,8 @@ type Confirm = 'disconnect' | 'clear' | 'reset' | null;
 export function SettingsScreen() {
   const top = useTopInset();
   const navigation = useNavigation<any>();
-  const { device, disconnect } = useConnection();
+  const { mode: appMode, deviceStatus, disconnect } = useDevice();
+  const demo = appMode === 'demo';
   const { sessions, clearAllSessions, resetSimulators } = useData();
   const { active, stop } = useRun();
   const [confirm, setConfirm] = useState<Confirm>(null);
@@ -26,13 +29,15 @@ export function SettingsScreen() {
 
   const copy: Record<Exclude<Confirm, null>, { title: string; body: string; action: string }> = {
     disconnect: {
-      title: 'Disconnect?',
-      body: active ? 'The current run will stop and be saved.' : 'You can reconnect any time.',
-      action: 'Disconnect',
+      title: demo ? 'Leave demo mode?' : 'Disconnect?',
+      body: active ? 'The current run will stop and be saved.' : demo ? 'Your demo runs stay saved.' : 'You can reconnect any time.',
+      action: demo ? 'Leave' : 'Disconnect',
     },
     clear: {
-      title: 'Delete all sessions?',
-      body: `${sessions.length} ${sessions.length === 1 ? 'run' : 'runs'} and all folders will be removed.`,
+      title: demo ? 'Delete all demo runs?' : 'Delete all sessions?',
+      body: demo
+        ? `${sessions.length} demo ${sessions.length === 1 ? 'run' : 'runs'} and their folders will be removed.`
+        : `${sessions.length} ${sessions.length === 1 ? 'run' : 'runs'} and all folders will be removed from this phone. The readings stay in Supabase.`,
       action: 'Delete',
     },
     reset: { title: 'Restore simulators?', body: 'Custom simulators will be removed.', action: 'Restore' },
@@ -62,18 +67,20 @@ export function SettingsScreen() {
 
         <Text style={[type.label, styles.section]}>Simulator</Text>
         <View style={styles.card}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>{device?.name ?? 'Not connected'}</Text>
-            {device && <Text style={styles.cardMeta}>{device.address}</Text>}
-          </View>
-          {device && (
-            <View style={styles.status}>
-              <Icon xml={svgs.dotConnected} size={10} />
-              <Text style={styles.statusText}>Connected</Text>
-            </View>
-          )}
+          <Text style={styles.cardTitle}>{demo ? 'Demo device (simulated)' : `Device ${deviceStatus?.deviceId ?? 'sim01'}`}</Text>
+          <DeviceStatusLine style={styles.cardStatus} />
+          <Text style={styles.cardMeta}>
+            {[
+              deviceStatus?.firmware && `Firmware ${deviceStatus.firmware}`,
+              deviceStatus?.wifiRssi != null && `Wi-Fi ${deviceStatus.wifiRssi} dBm`,
+              deviceStatus?.lastSeen && `Last heartbeat ${formatTimeSgt(deviceStatus.lastSeen)} SGT`,
+            ]
+              .filter(Boolean)
+              .join(' · ') || (demo ? 'Built-in simulation' : 'No heartbeat received yet')}
+          </Text>
+          <Text style={styles.cardMeta}>{demo ? 'Not connected to the real device.' : 'Live via Supabase'}</Text>
         </View>
-        <Item label="Disconnect" danger onPress={() => setConfirm('disconnect')} />
+        <Item label={demo ? 'Leave demo mode' : 'Disconnect'} danger onPress={() => setConfirm('disconnect')} />
 
         <Text style={[type.label, styles.section]}>Appearance</Text>
         <View style={styles.toggle}>
@@ -98,9 +105,13 @@ export function SettingsScreen() {
 
         <Text style={[type.label, styles.section]}>Data</Text>
         <Item label="Restore default simulators" onPress={() => setConfirm('reset')} />
-        <Item label="Delete all sessions" danger disabled={!sessions.length} onPress={() => setConfirm('clear')} />
+        <Item label={demo ? 'Delete all demo runs' : 'Delete all sessions'} danger disabled={!sessions.length} onPress={() => setConfirm('clear')} />
 
-        <Text style={styles.foot}>Runs are saved on this device.</Text>
+        <Text style={styles.foot}>
+          {demo
+            ? 'Demo runs are saved on this phone, separately from real runs.'
+            : 'Readings are stored in Supabase. Each run’s time range is kept on this phone for now.'}
+        </Text>
       </ScrollView>
 
       <Dialog visible={!!confirm} onRequestClose={() => setConfirm(null)}>
@@ -151,10 +162,9 @@ const styles = themedStyles(() => ({
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.cardBorder,
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 26,
   },
+  cardStatus: { marginTop: 8 },
   cardTitle: { ...font.bold, fontSize: fs(18), color: colors.strong },
   cardMeta: { ...font.regular, fontSize: fs(14), color: colors.muted, marginTop: 5 },
   status: { flexDirection: 'row', alignItems: 'center', gap: 10 },
