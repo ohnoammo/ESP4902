@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git remote add origin https://github.com/ohnoammo/ESP4902.git)",
+      "Bash(git fetch:*)",
+      "Bash(git push origin main)"
+    ]
+  }
+}
