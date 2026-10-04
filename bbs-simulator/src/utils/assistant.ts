@@ -39,7 +39,7 @@ export interface AssistantData {
 // Non-breaking space so a value never wraps away from its unit.
 const fmt = (v: number, m: Metric) => `${formatNumber(v, m.decimals)} ${m.unit}`;
 const newestFirst = (runs: SessionMeta[]) => [...runs].sort((a, b) => b.startedAt - a.startedAt);
-const label = (r: SessionMeta) => `"${r.name}" (${formatRunMeta(r.startedAt, r.durationSec)})`;
+const label = (r: SessionMeta) => `"${r.name}" (${formatRunMeta(r)})`;
 
 function metricsIn(t: string): Metric[] {
   const found = METRICS.filter((m) => m.match.test(t));

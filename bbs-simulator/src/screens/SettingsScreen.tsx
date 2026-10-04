@@ -37,7 +37,7 @@ export function SettingsScreen() {
       title: demo ? 'Delete all demo runs?' : 'Delete all sessions?',
       body: demo
         ? `${sessions.length} demo ${sessions.length === 1 ? 'run' : 'runs'} and their folders will be removed.`
-        : `${sessions.length} ${sessions.length === 1 ? 'run' : 'runs'} and all folders will be removed from this phone. The readings stay in Supabase.`,
+        : `${sessions.length} ${sessions.length === 1 ? 'run' : 'runs'} will be archived (hidden) in Supabase and folders removed. Their readings are kept.`,
       action: 'Delete',
     },
     reset: { title: 'Restore simulators?', body: 'Custom simulators will be removed.', action: 'Restore' },
@@ -110,7 +110,7 @@ export function SettingsScreen() {
         <Text style={styles.foot}>
           {demo
             ? 'Demo runs are saved on this phone, separately from real runs.'
-            : 'Readings are stored in Supabase. Each run’s time range is kept on this phone for now.'}
+            : 'Runs and readings are stored in Supabase. Deleting a run archives it. Folders and order are kept on this phone.'}
         </Text>
       </ScrollView>
 

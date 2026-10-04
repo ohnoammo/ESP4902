@@ -1,7 +1,7 @@
-import React, { useEffect, useRef } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { BackButton, PrimaryButton, Screen, useTopInset } from '../components/basics';
+import { BackButton, Field, PrimaryButton, Screen, useTopInset } from '../components/basics';
 import { BreathWave } from '../components/waves';
 import { DeviceStatusLine, UnrecordedRunCard } from '../components/DeviceStatus';
 import { HomeStackParams } from '../navigation/types';
@@ -23,7 +23,11 @@ const START_MESSAGES: Partial<Record<CommandOutcome, string>> = {
 export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeStackParams, 'Ready'>) {
   const top = useTopInset();
   const { simulators } = useData();
-  const { active, pendingStart, startOutcome, startError, start } = useRun();
+  const { active, pendingStart, startOutcome, startError, start, lastDetails } = useRun();
+  // Test notes saved with the run; prefilled from the last run, since tests usually repeat a setup.
+  const [headform, setHeadform] = useState(lastDetails.headform ?? '');
+  const [mask, setMask] = useState(lastDetails.mask ?? '');
+  const [notes, setNotes] = useState(lastDetails.notes ?? '');
   const { online, running } = useDevice();
   const sim = simulators.find((s) => s.id === route.params.simulatorId);
 
@@ -72,7 +76,12 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.content, { paddingTop: top + 11 }]}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.content, { paddingTop: top + 11 }]}
+      >
         <BackButton label="Simulators" onPress={() => navigation.popTo('Simulators')} />
         <View style={styles.titleRow}>
           <Text style={[type.hero, styles.title, { fontSize: heroSize(sim.name) }]} numberOfLines={2} accessibilityRole="header">
@@ -93,9 +102,30 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
           <ParamRow label="I:E ratio" value={formatRatio(sim.ieRatio)} note="Fixed 1:1 in current firmware" />
         </View>
 
+        {!thisRunning && (
+          <View style={styles.details}>
+            <Text style={styles.detailsTitle}>Test details (optional)</Text>
+            <Field value={headform} onChangeText={setHeadform} placeholder="Headform" maxLength={80} accessibilityLabel="Headform" />
+            <Field value={mask} onChangeText={setMask} placeholder="Mask" maxLength={80} accessibilityLabel="Mask" />
+            <Field
+              value={notes}
+              onChangeText={setNotes}
+              placeholder="Notes"
+              multiline
+              maxLength={500}
+              style={styles.notes}
+              accessibilityLabel="Notes"
+            />
+          </View>
+        )}
+
         <PrimaryButton
           label={label}
-          onPress={() => (thisRunning ? navigation.navigate('Running') : start(sim))}
+          onPress={() =>
+            thisRunning
+              ? navigation.navigate('Running')
+              : start(sim, { headform: headform || null, mask: mask || null, notes: notes || null })
+          }
           disabled={disabled}
           loading={starting && !thisRunning}
           style={styles.start}
@@ -106,6 +136,7 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
           </Text>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
@@ -152,7 +183,10 @@ const styles = themedStyles(() => ({
   paramNote: { ...font.regular, fontSize: fs(13), color: colors.muted, marginTop: 3 },
   paramValue: { ...font.regular, fontSize: fs(20), color: colors.text, minWidth: 40, textAlign: 'right' },
   paramUnit: { ...font.regular, fontSize: fs(20), color: colors.text, minWidth: 44, textAlign: 'right' },
-  start: { marginTop: 15 },
+  details: { marginHorizontal: 24, marginTop: 20, gap: 10 },
+  detailsTitle: { ...font.bold, fontSize: fs(14), color: colors.muted, marginLeft: 6 },
+  notes: { height: undefined, minHeight: 72, paddingTop: 12, textAlignVertical: 'top' },
+  start: { marginTop: 18 },
   message: { ...font.regular, fontSize: fs(14), lineHeight: fs(20), color: colors.muted, marginHorizontal: 37, marginTop: 12, textAlign: 'center' },
   problem: { ...font.bold, color: colors.danger },
 }));

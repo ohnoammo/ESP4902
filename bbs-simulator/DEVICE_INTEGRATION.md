@@ -20,6 +20,7 @@ commands; the app reads those over Realtime and inserts commands.
 | `telemetry` | `id`, `sampled_at`, `device_id` (`'sim01'`), `rpm_inhale`, `rpm_exhale`, `co2_ppm`, `temp_c`, `rh_pct`, `phase` (`inhale`/`exhale`/`idle`) | read |
 | `device_status` | `device_id` (pk), `last_seen`, `firmware`, `wifi_rssi` | read |
 | `commands` | `id`, `created_at`, `device_id`, `command`, `params` (jsonb), `status`, `acked_at` | read, insert |
+| `runs` | `id`, `device_id`, `name`, `started_at`, `ended_at`, `ended_by`, `bpm`, `duty`, `ie_ratio`, `firmware`, `headform`, `mask`, `notes`, `archived`, `start_command_id`, `stop_command_id` | read, insert, update (no delete) |
 
 ## Telemetry
 
@@ -68,9 +69,22 @@ A run is the stretch between the device starting and stopping:
 2. It ends when a row reports `idle` (the end time is that row's `sampled_at`), or when the user
    presses Stop (a `stop` command is sent and the recording ends at that moment).
 
-Live runs keep only their time range and settings (on the phone for now; a Supabase runs table
-is proposed, not created) and fetch their readings from `telemetry` when opened. Demo runs are
-stored on the phone, under separate keys, and never listed with real runs.
+Live runs are rows in `runs` (`src/device/runsApi.ts`):
+
+- **Insert** when recording begins: `name`, `started_at` (sampled_at of the first non-idle row),
+  `bpm`, `duty`, `ie_ratio`, `firmware` (copied from `device_status`), `start_command_id`, and
+  the test details `headform`, `mask`, `notes` entered on the Ready screen. `ended_at` stays null.
+- **Update** when it ends: `ended_at`, `ended_by` (`user` or `device`), `stop_command_id`.
+- **Edit** afterwards: `name` (rename) and `headform`/`mask`/`notes` (Test details card).
+- **Delete** in the app sets `archived = true` (there is no delete policy); archived runs are hidden.
+- **Readings** are fetched from `telemetry` by `started_at`..`ended_at` when a run is opened.
+- **Left open** (app closed mid-run): on connect, if the device is still running the app resumes
+  recording that run; otherwise it closes it at the first idle row, `ended_by = 'device'`. The
+  database allows only one open run per device.
+- New and changed rows arrive via Realtime, so runs from another phone appear too.
+- Folders and list order are kept on each phone, not in Supabase.
+
+Demo runs are stored on the phone, under separate keys, and never listed with real runs.
 
 ## Demo mode
 
@@ -88,4 +102,5 @@ shows a "DEMO · simulated data" banner.
 | `src/device/supabaseBackend.ts` | Realtime subscription, history fetch, command insert, range fetch for runs. |
 | `src/device/demoBackend.ts` | The simulated device. |
 | `src/state/DeviceContext.tsx` | Rolling buffer, online/running state, command tracking. |
-| `src/state/RunContext.tsx` | Run start/stop and saving. |
+| `src/device/runsApi.ts` | The `runs` table: list, insert, update, Realtime. |
+| `src/state/RunContext.tsx` | Run start/stop, writing the run row, recovering a run left open. |

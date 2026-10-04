@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BackButton, Field, Icon, LinkText, OutlinePill, PrimaryButton, Screen, useTopInset } from '../components/basics';
 import { SegmentedToggle, SensorChips } from '../components/controls';
 import { SensorPanel } from '../components/SensorPanel';
+import { RunDetailsCard } from '../components/RunDetailsCard';
 import { SessionsStackParams } from '../navigation/types';
 import { useData } from '../state/DataContext';
 import { fs, colors, heroSize, themedStyles, type } from '../theme';
@@ -17,7 +18,7 @@ import { themedSvgs } from '../assets/themedSvgs';
 export function SessionScreen({ navigation, route }: NativeStackScreenProps<SessionsStackParams, 'Session'>) {
   const top = useTopInset();
   const insets = useSafeAreaInsets();
-  const { sessions, loadSamples, renameSession } = useData();
+  const { sessions, loadSamples, renameSession, updateDetails } = useData();
   const run = sessions.find((s) => s.id === route.params.id);
   const [samples, setSamples] = useState<Sample[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -112,7 +113,7 @@ export function SessionScreen({ navigation, route }: NativeStackScreenProps<Sess
             </>
           )}
           <Text style={[styles.meta, editing && { marginTop: 24 }]}>
-            {formatRunMeta(run.startedAt, run.durationSec)}
+            {formatRunMeta(run)}
           </Text>
 
           <View style={styles.body}>
@@ -134,6 +135,7 @@ export function SessionScreen({ navigation, route }: NativeStackScreenProps<Sess
                 <Text style={type.meta}>{loadError ? `Couldn't load the readings: ${loadError}` : 'Loading readings…'}</Text>
               )}
             </View>
+            <RunDetailsCard run={run} onSave={(d) => updateDetails(run.id, d)} />
           </View>
         </ScrollView>
         <PrimaryButton

@@ -18,7 +18,7 @@ export function RunText({ run }: { run: SessionMeta }) {
       <Text style={rowStyles.name} numberOfLines={1}>
         {run.name}
       </Text>
-      <Text style={rowStyles.meta}>{formatRunMeta(run.startedAt, run.durationSec)}</Text>
+      <Text style={rowStyles.meta}>{formatRunMeta(run)}</Text>
     </>
   );
 }
@@ -122,7 +122,7 @@ export function RunRow({
         {...responder.panHandlers}
         style={[rowStyles.content, pressed && rowStyles.pressed]}
         accessibilityRole="button"
-        accessibilityLabel={`${run.name}, ${formatRunMeta(run.startedAt, run.durationSec)}`}
+        accessibilityLabel={`${run.name}, ${formatRunMeta(run)}`}
         accessibilityHint="Opens the run. Swipe left to delete, hold to drag."
         accessibilityActions={[{ name: 'activate' }, { name: 'delete', label: 'Delete run' }]}
         onAccessibilityAction={(e) => (e.nativeEvent.actionName === 'delete' ? onDelete() : onPress())}

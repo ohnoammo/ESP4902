@@ -12,7 +12,7 @@ import { Folder } from '../types';
 
 export function SessionsScreen({ navigation }: NativeStackScreenProps<SessionsStackParams, 'Sessions'>) {
   const top = useTopInset();
-  const { sessions, folders, addFolder, deleteFolder, deleteSession, moveSession, reorderSessions } = useData();
+  const { sessions, folders, syncError, addFolder, deleteFolder, deleteSession, moveSession, reorderSessions } = useData();
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [folderToDelete, setFolderToDelete] = useState<Folder | null>(null);
@@ -61,6 +61,7 @@ export function SessionsScreen({ navigation }: NativeStackScreenProps<SessionsSt
             </View>
           )}
           <ActiveRunBanner />
+          {syncError && <Text style={styles.syncError}>{syncError}</Text>}
 
           <View style={styles.sectionRow}>
             {drag ? (
@@ -172,6 +173,7 @@ export function DeleteFolderDialog({
 }
 
 const styles = themedStyles(() => ({
+  syncError: { ...font.regular, fontSize: fs(13), lineHeight: fs(18), color: colors.danger, marginHorizontal: 37, marginTop: 12 },
   actions: { flexDirection: 'row', gap: 12, paddingLeft: 37, marginTop: 14, marginBottom: 10 },
   titleRow: {
     flexDirection: 'row',

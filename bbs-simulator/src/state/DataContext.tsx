@@ -1,20 +1,22 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppMode, Folder, Phase, Sample, SessionMeta, Simulator } from '../types';
+import { AppMode, Folder, Phase, RunDetails, Sample, SessionMeta, Simulator } from '../types';
 import { BPM_RANGE, DEVICE_ID } from '../device';
+import { listRuns, RunPatch, RunRowView, subscribeRuns, updateRun } from '../device/runsApi';
 import { newId } from '../utils/format';
 import { perSecond } from '../utils/telemetry';
 import { useDevice } from './DeviceContext';
 
-// Simulator presets are shared by both modes. Runs and folders are kept per mode, under
-// separate keys, so demo runs are never stored or listed alongside real ones.
-//   demo runs: samples are copied onto the device (the simulation isn't kept anywhere else)
-//   live runs: only the time range + settings are kept; readings are fetched from Supabase
-//              when the run is opened. (Run metadata moves to a Supabase table once it exists.)
+// Simulator presets are shared by both modes. Runs and folders are kept per mode, so demo
+// runs are never stored or listed alongside real ones.
+//   demo runs: stored on the phone, samples included (the simulation isn't kept anywhere else)
+//   live runs: rows in the Supabase `runs` table (see device/runsApi.ts); readings are fetched
+//              from `telemetry` when a run is opened. Folders and ordering stay on the phone.
 const KEYS = {
   simulators: 'bbs.simulators',
   sessions: (mode: AppMode) => `bbs.${mode}.sessions`,
   folders: (mode: AppMode) => `bbs.${mode}.folders`,
+  layout: 'bbs.live.layout', // phone-side order and folders of live runs
   samples: (id: string) => `bbs.demo.samples.${id}`,
   // Before live mode existed every run was simulated: these move into demo, once.
   legacySessions: 'bbs.sessions',
@@ -40,7 +42,17 @@ function migrateSimulator(s: any): Simulator {
 
 function migrateSession(s: any): SessionMeta {
   const { id: _id, ...simulator } = migrateSimulator({ id: '', ...s.simulator });
-  return { ...s, simulator, deviceId: s.deviceId ?? DEVICE_ID };
+  return {
+    headform: null,
+    mask: null,
+    notes: null,
+    firmware: null,
+    endedBy: 'user',
+    ...s,
+    endedAt: s.endedAt ?? s.startedAt + s.durationSec * 1000,
+    simulator,
+    deviceId: s.deviceId ?? DEVICE_ID,
+  };
 }
 
 // Demo samples on disk: one row of numbers per second (nulls kept for unmeasured values).
@@ -115,10 +127,18 @@ async function migrateLegacyRuns() {
   await AsyncStorage.multiRemove([KEYS.legacySessions, KEYS.legacyFolders, ...list.map((s) => KEYS.legacySamples(s.id))]);
 }
 
+// Phone-side organisation of live runs (the runs table has no folders or ordering).
+interface Layout {
+  order: string[]; // run ids, top first; runs not listed here go on top, newest first
+  folderOf: Record<string, string>; // run id -> folder id
+}
+const EMPTY_LAYOUT: Layout = { order: [], folderOf: {} };
+
 interface Store {
   mode: AppMode | null; // whose runs these are; null until a mode is chosen
-  sessions: SessionMeta[];
+  sessions: SessionMeta[]; // demo runs (live runs come from Supabase)
   folders: Folder[];
+  layout: Layout; // live only
 }
 
 interface DataContextValue {
@@ -126,12 +146,15 @@ interface DataContextValue {
   simulators: Simulator[];
   sessions: SessionMeta[];
   folders: Folder[];
+  syncError: string | null; // last failed write to Supabase
   addSimulator: (sim: Omit<Simulator, 'id'>) => void;
   deleteSimulator: (id: string) => void;
   resetSimulators: () => void;
-  addSession: (meta: SessionMeta, samples: Sample[] | null) => void;
+  addSession: (meta: SessionMeta, samples: Sample[]) => void; // demo runs
+  applyRun: (run: RunRowView) => void; // a live run row just written by this phone
   renameSession: (id: string, name: string) => void;
-  deleteSession: (id: string) => void;
+  updateDetails: (id: string, details: RunDetails) => Promise<void>;
+  deleteSession: (id: string) => void; // live: archives the run
   moveSession: (id: string, folderId: string | null) => void;
   reorderSessions: (orderedIds: string[]) => void;
   addFolder: (name: string) => string;
@@ -146,10 +169,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const { mode, fetchRange } = useDevice();
   const [loaded, setLoaded] = useState(false);
   const [simulators, setSimulators] = useState<Simulator[]>(DEFAULT_SIMULATORS);
-  const [store, setStore] = useState<Store>({ mode: null, sessions: [], folders: [] });
+  const [store, setStore] = useState<Store>({ mode: null, sessions: [], folders: [], layout: EMPTY_LAYOUT });
+  const [remote, setRemote] = useState<RunRowView[]>([]); // live runs from Supabase
+  const [syncError, setSyncError] = useState<string | null>(null);
   const sampleCache = useRef(new Map<string, Sample[]>());
-  const storeRef = useRef(store);
-  storeRef.current = store;
 
   useEffect(() => {
     (async () => {
@@ -167,41 +190,90 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   // Load the chosen mode's runs; nothing is shown from the other mode.
   useEffect(() => {
     sampleCache.current.clear();
+    setRemote([]);
+    setSyncError(null);
     if (!loaded || !mode) {
-      setStore({ mode: null, sessions: [], folders: [] });
+      setStore({ mode: null, sessions: [], folders: [], layout: EMPTY_LAYOUT });
       return;
     }
     let alive = true;
-    AsyncStorage.multiGet([KEYS.sessions(mode), KEYS.folders(mode)])
-      .then(([[, r], [, f]]) => {
+    AsyncStorage.multiGet([KEYS.sessions(mode), KEYS.folders(mode), KEYS.layout])
+      .then(([[, r], [, f], [, l]]) => {
         if (!alive) return;
         setStore({
           mode,
-          sessions: r ? JSON.parse(r).map(migrateSession) : [],
+          sessions: mode === 'demo' && r ? JSON.parse(r).map(migrateSession) : [],
           folders: f ? JSON.parse(f) : [],
+          layout: mode === 'live' && l ? { ...EMPTY_LAYOUT, ...JSON.parse(l) } : EMPTY_LAYOUT,
         });
       })
-      .catch(() => alive && setStore({ mode, sessions: [], folders: [] }));
+      .catch(() => alive && setStore({ mode, sessions: [], folders: [], layout: EMPTY_LAYOUT }));
+    if (mode !== 'live') {
+      return () => {
+        alive = false;
+      };
+    }
+    // Live runs: the list from Supabase, then every insert/update via Realtime.
+    listRuns()
+      .then((runs) => alive && setRemote(runs))
+      .catch((e) => alive && setSyncError(`Couldn't load runs: ${e instanceof Error ? e.message : String(e)}`));
+    const unsubscribe = subscribeRuns((run) => alive && upsert(setRemote, run));
     return () => {
       alive = false;
+      unsubscribe();
     };
   }, [loaded, mode]);
 
-  // Persist after the initial load so defaults never overwrite saved data. Runs are written
-  // to the namespace they were loaded from, so switching modes can't cross them over.
+  // Persist after the initial load so defaults never overwrite saved data. Everything is
+  // written to the namespace it was loaded from, so switching modes can't cross them over.
   useEffect(() => {
     if (loaded) AsyncStorage.setItem(KEYS.simulators, JSON.stringify(simulators)).catch(() => {});
   }, [loaded, simulators]);
   useEffect(() => {
-    if (!store.mode) return;
-    AsyncStorage.multiSet([
-      [KEYS.sessions(store.mode), JSON.stringify(store.sessions)],
-      [KEYS.folders(store.mode), JSON.stringify(store.folders)],
-    ]).catch(() => {});
+    if (store.mode === 'demo') {
+      AsyncStorage.multiSet([
+        [KEYS.sessions('demo'), JSON.stringify(store.sessions)],
+        [KEYS.folders('demo'), JSON.stringify(store.folders)],
+      ]).catch(() => {});
+    } else if (store.mode === 'live') {
+      AsyncStorage.multiSet([
+        [KEYS.folders('live'), JSON.stringify(store.folders)],
+        [KEYS.layout, JSON.stringify(store.layout)],
+      ]).catch(() => {});
+    }
   }, [store]);
 
   const update = useCallback((fn: (s: Store) => Partial<Store>) => {
     setStore((prev) => (prev.mode ? { ...prev, ...fn(prev) } : prev));
+  }, []);
+
+  // What the Sessions list shows. Live: non-archived rows in the phone's order (new runs on
+  // top, newest first), with the phone's folder assignments.
+  const sessions = useMemo<SessionMeta[]>(() => {
+    if (store.mode !== 'live') return store.sessions;
+    const visible = remote.filter((r) => !r.archived);
+    const byId = new Map(visible.map((r) => [r.id, r]));
+    const placed = new Set(store.layout.order);
+    const fresh = visible.filter((r) => !placed.has(r.id)).sort((a, b) => b.startedAt - a.startedAt);
+    const ordered = store.layout.order.map((id) => byId.get(id)).filter((r): r is RunRowView => !!r);
+    return [...fresh, ...ordered].map(({ archived: _a, ...r }) => ({ ...r, folderId: store.layout.folderOf[r.id] ?? null }));
+  }, [store, remote]);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const modeRef = useRef(store.mode);
+  modeRef.current = store.mode;
+
+  // Write to Supabase; on failure, report it and reload the list so the screen shows the truth.
+  const writeRun = useCallback(async (id: string, patch: RunPatch) => {
+    try {
+      const row = await updateRun(id, patch);
+      upsert(setRemote, row);
+      setSyncError(null);
+    } catch (e) {
+      setSyncError(`Couldn't save to Supabase: ${e instanceof Error ? e.message : String(e)}`);
+      listRuns().then(setRemote).catch(() => {});
+      throw e;
+    }
   }, []);
 
   const addSimulator = useCallback((sim: Omit<Simulator, 'id'>) => {
@@ -214,48 +286,90 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const resetSimulators = useCallback(() => setSimulators(DEFAULT_SIMULATORS), []);
 
-  // `samples` is given for demo runs (stored on the device) and null for live runs.
   const addSession = useCallback(
-    (meta: SessionMeta, samples: Sample[] | null) => {
-      if (samples) {
-        sampleCache.current.set(meta.id, samples);
-        AsyncStorage.setItem(KEYS.samples(meta.id), JSON.stringify(packSamples(samples))).catch(() => {});
-      }
+    (meta: SessionMeta, samples: Sample[]) => {
+      sampleCache.current.set(meta.id, samples);
+      AsyncStorage.setItem(KEYS.samples(meta.id), JSON.stringify(packSamples(samples))).catch(() => {});
       update((s) => ({ sessions: [meta, ...s.sessions] }));
     },
     [update]
   );
 
+  const applyRun = useCallback((run: RunRowView) => {
+    sampleCache.current.delete(run.id); // its time range may have changed
+    upsert(setRemote, run);
+  }, []);
+
   const renameSession = useCallback(
-    (id: string, name: string) => update((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, name } : x)) })),
-    [update]
+    (id: string, name: string) => {
+      if (modeRef.current === 'live') {
+        upsert(setRemote, { ...findRemote(sessionsRef.current, id), name });
+        void writeRun(id, { name }).catch(() => {});
+      } else {
+        update((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, name } : x)) }));
+      }
+    },
+    [update, writeRun]
+  );
+
+  const updateDetails = useCallback(
+    async (id: string, details: RunDetails) => {
+      if (modeRef.current === 'live') {
+        await writeRun(id, details);
+      } else {
+        update((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, ...details } : x)) }));
+      }
+    },
+    [update, writeRun]
   );
 
   const deleteSession = useCallback(
     (id: string) => {
       sampleCache.current.delete(id);
-      if (storeRef.current.mode === 'demo') AsyncStorage.removeItem(KEYS.samples(id)).catch(() => {});
-      update((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }));
+      if (modeRef.current === 'live') {
+        // No deletes in Supabase: archive it, which hides it everywhere.
+        setRemote((prev) => prev.filter((r) => r.id !== id));
+        void writeRun(id, { archived: true }).catch(() => {});
+      } else {
+        AsyncStorage.removeItem(KEYS.samples(id)).catch(() => {});
+        update((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }));
+      }
     },
-    [update]
+    [update, writeRun]
   );
 
   const moveSession = useCallback(
-    (id: string, folderId: string | null) =>
-      update((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, folderId } : x)) })),
+    (id: string, folderId: string | null) => {
+      if (modeRef.current === 'live') {
+        update((s) => {
+          const folderOf = { ...s.layout.folderOf };
+          if (folderId) folderOf[id] = folderId;
+          else delete folderOf[id];
+          return { layout: { ...s.layout, folderOf } };
+        });
+      } else {
+        update((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, folderId } : x)) }));
+      }
+    },
     [update]
   );
 
   // Reorders a subset (e.g. one folder's runs) in place: the slots those runs occupy
   // in the global list are refilled in the new order, everything else stays put.
   const reorderSessions = useCallback(
-    (orderedIds: string[]) =>
-      update((s) => {
-        const subset = new Set(orderedIds);
-        const byId = new Map(s.sessions.map((x) => [x.id, x]));
+    (orderedIds: string[]) => {
+      const subset = new Set(orderedIds);
+      const refill = <T,>(list: T[], idOf: (x: T) => string, byId: Map<string, T>) => {
         let next = 0;
-        return { sessions: s.sessions.map((x) => (subset.has(x.id) ? byId.get(orderedIds[next++])! : x)) };
-      }),
+        return list.map((x) => (subset.has(idOf(x)) ? byId.get(orderedIds[next++])! : x));
+      };
+      if (modeRef.current === 'live') {
+        const ids = sessionsRef.current.map((x) => x.id);
+        update((s) => ({ layout: { ...s.layout, order: refill(ids, (x) => x, new Map(ids.map((x) => [x, x]))) } }));
+      } else {
+        update((s) => ({ sessions: refill(s.sessions, (x) => x.id, new Map(s.sessions.map((x) => [x.id, x]))) }));
+      }
+    },
     [update]
   );
 
@@ -273,29 +387,38 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       update((s) => ({
         folders: s.folders.filter((f) => f.id !== id),
         sessions: s.sessions.map((x) => (x.folderId === id ? { ...x, folderId: null } : x)),
+        layout: {
+          ...s.layout,
+          folderOf: Object.fromEntries(Object.entries(s.layout.folderOf).filter(([, f]) => f !== id)),
+        },
       })),
     [update]
   );
 
   const clearAllSessions = useCallback(() => {
-    if (storeRef.current.mode === 'demo') {
-      AsyncStorage.multiRemove(storeRef.current.sessions.map((s) => KEYS.samples(s.id))).catch(() => {});
-    }
     sampleCache.current.clear();
-    update(() => ({ sessions: [], folders: [] }));
-  }, [update]);
+    if (modeRef.current === 'live') {
+      const ids = sessionsRef.current.map((x) => x.id);
+      setRemote([]);
+      update(() => ({ folders: [], layout: EMPTY_LAYOUT }));
+      void Promise.all(ids.map((id) => writeRun(id, { archived: true }))).catch(() => {});
+    } else {
+      AsyncStorage.multiRemove(sessionsRef.current.map((s) => KEYS.samples(s.id))).catch(() => {});
+      update(() => ({ sessions: [], folders: [] }));
+    }
+  }, [update, writeRun]);
 
   const loadSamples = useCallback(
     async (id: string) => {
       const cached = sampleCache.current.get(id);
       if (cached) return cached;
-      const { mode: m, sessions } = storeRef.current;
       let samples: Sample[];
-      if (m === 'live') {
-        const run = sessions.find((s) => s.id === id);
+      if (modeRef.current === 'live') {
+        const run = sessionsRef.current.find((s) => s.id === id);
         if (!run) return [];
-        const rows = await fetchRange(run.startedAt, run.startedAt + run.durationSec * 1000);
+        const rows = await fetchRange(run.startedAt, run.endedAt ?? Date.now());
         samples = perSecond(rows, run.startedAt);
+        if (run.endedAt === null) return samples; // still recording: don't cache a partial run
       } else {
         const raw = await AsyncStorage.getItem(KEYS.samples(id));
         samples = raw ? unpackSamples(JSON.parse(raw)) : [];
@@ -310,13 +433,16 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     () => ({
       loaded,
       simulators,
-      sessions: store.sessions,
+      sessions,
       folders: store.folders,
+      syncError,
       addSimulator,
       deleteSimulator,
       resetSimulators,
       addSession,
+      applyRun,
       renameSession,
+      updateDetails,
       deleteSession,
       moveSession,
       reorderSessions,
@@ -328,12 +454,16 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     [
       loaded,
       simulators,
-      store,
+      sessions,
+      store.folders,
+      syncError,
       addSimulator,
       deleteSimulator,
       resetSimulators,
       addSession,
+      applyRun,
       renameSession,
+      updateDetails,
       deleteSession,
       moveSession,
       reorderSessions,
@@ -345,6 +475,21 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
+}
+
+function upsert(set: React.Dispatch<React.SetStateAction<RunRowView[]>>, run: RunRowView) {
+  set((prev) => {
+    const i = prev.findIndex((r) => r.id === run.id);
+    if (i === -1) return [run, ...prev];
+    const next = prev.slice();
+    next[i] = run;
+    return next;
+  });
+}
+
+function findRemote(sessions: SessionMeta[], id: string): RunRowView {
+  const { folderId: _f, ...run } = sessions.find((s) => s.id === id)!;
+  return { ...run, archived: false };
 }
 
 export function useData() {

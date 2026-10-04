@@ -43,9 +43,9 @@ export function formatTimestampSgt(ms: number): string {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${formatTimeSgt(ms)}.${String(d.getUTCMilliseconds()).padStart(3, '0')}`;
 }
 
-// "22 Sep · 8 min"
-export function formatRunMeta(startedAt: number, durationSec: number): string {
-  return `${formatDateSgt(startedAt)} · ${formatDuration(durationSec)}`;
+// "22 Sep · 8 min", or "22 Sep · recording" for a run that hasn't ended.
+export function formatRunMeta(run: { startedAt: number; durationSec: number; endedAt: number | null }): string {
+  return `${formatDateSgt(run.startedAt)} · ${run.endedAt === null ? 'recording' : formatDuration(run.durationSec)}`;
 }
 
 export function formatRatio(ie: number): string {

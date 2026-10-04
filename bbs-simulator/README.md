@@ -60,9 +60,13 @@ tabs: **Home** (simulators), **Sessions**, **Settings**.
 | `src/navigation/TabBar.tsx` | Custom nav bar with the notched active tab. |
 | `src/theme.ts` | Dark (Figma) and light palettes, fonts, `themedStyles`, `fs()` text scaling. Wrap every new `fontSize` in `fs()` or it won't follow Text size. |
 
+Before **Start**, optional test details (headform, mask, notes) can be entered; they are saved with
+the run and editable afterwards on the run's Test details card, which also shows the settings,
+firmware and how the run ended. In live mode, deleting a run archives it in Supabase.
+
 Telemetry arrives at 10 Hz and is shown as 1 s averages (fan speeds on the Sensors screen show
-the newest reading, since the fans alternate by phase). Live runs keep only their time range and
-settings on the phone and fetch readings from Supabase when opened; demo runs store their 1 s
+the newest reading, since the fans alternate by phase). Live runs are rows in the Supabase `runs` table and fetch their readings from `telemetry` when
+opened; demo runs store their 1 s
 samples on the phone. CSV export has one row per second with times in SGT and CO2 in ppm.
 
 ## Guesses made where the prototype wasn't wired

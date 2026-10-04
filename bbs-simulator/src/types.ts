@@ -29,13 +29,25 @@ export interface Sample {
 
 export type AppMode = 'live' | 'demo';
 
-export interface SessionMeta {
+// Free-text test notes, entered when starting a run and editable afterwards.
+export interface RunDetails {
+  headform: string | null;
+  mask: string | null;
+  notes: string | null;
+}
+
+// A recorded run. Live runs are rows in the Supabase `runs` table (readings stay in
+// `telemetry`); demo runs are kept on the phone. Folders and ordering are always local.
+export interface SessionMeta extends RunDetails {
   id: string;
   name: string;
   simulator: Omit<Simulator, 'id'>;
   deviceId: string;
   startedAt: number; // epoch ms (device sampled_at)
-  durationSec: number;
+  endedAt: number | null; // null while recording
+  endedBy: 'user' | 'device' | null;
+  durationSec: number; // to endedAt, or to when it was loaded if still recording
+  firmware: string | null;
   folderId: string | null;
 }
 
