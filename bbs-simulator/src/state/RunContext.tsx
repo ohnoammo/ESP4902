@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { RunDetails, Simulator } from '../types';
-import { CommandRecord, CommandStatus, DEVICE_ID, validateStart } from '../device';
+import { CommandRecord, CommandStatus, DEVICE_ID, StartParams, validateStart } from '../device';
 import { findOpenRun, insertRun, RunRowView, updateRun } from '../device/runsApi';
 import { formatTimeSgt, newId } from '../utils/format';
 import { perSecond } from '../utils/telemetry';
@@ -135,9 +135,10 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
       inserting.current = insertRun({
         name: sim.name,
         startedAt: run.startedAt,
-        bpm: Math.round(sim.respiratoryRate),
+        mode: sim.mode,
+        bpm: sim.mode === 'breath' && sim.respiratoryRate !== null ? Math.round(sim.respiratoryRate) : null,
         duty: Math.round(sim.duty),
-        ieRatio: sim.ieRatio,
+        ieRatio: sim.mode === 'breath' ? sim.ieRatio : null,
         firmware: deviceStatus?.firmware ?? null,
         startCommandId,
         ...details,
@@ -281,7 +282,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     const text: Record<CommandOutcome, Notice | null> = {
       pending: { text: 'Stopping… waiting for the device.', tone: 'info' },
       done: { text: 'The device confirmed Stop.', tone: 'success' },
-      error: { text: "The device didn't recognise Stop. Check it and try again.", tone: 'error' },
+      error: { text: 'Device rejected the command.', tone: 'error' },
       expired: { text: 'Stop expired before the device received it. Press Stop again.', tone: 'error' },
       'no-response': { text: 'No response from device. It stops by itself ~10 s after losing the network.', tone: 'warning' },
     };
@@ -292,7 +293,15 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     async (sim: Simulator, details: RunDetails) => {
       setStartError(null);
       setLastDetails(details);
-      const params = { bpm: Math.round(sim.respiratoryRate), duty: Math.round(sim.duty) };
+      if (sim.mode === 'breath' && sim.respiratoryRate === null) {
+        setStartError('Set the respiratory rate first.');
+        return;
+      }
+      // Missing params keep the firmware's last-used values, so send every one that applies.
+      const params: StartParams =
+        sim.mode === 'free'
+          ? { mode: 'free', duty: Math.round(sim.duty) }
+          : { mode: 'breath', bpm: Math.round(sim.respiratoryRate!), duty: Math.round(sim.duty), ie_ratio: sim.ieRatio };
       const invalid = validateStart(params);
       if (invalid) {
         setStartError(invalid);

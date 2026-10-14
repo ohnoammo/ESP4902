@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppMode, Folder, Phase, RunDetails, Sample, SessionMeta, Simulator } from '../types';
-import { BPM_RANGE, DEVICE_ID } from '../device';
+import { BPM_RANGE, DEVICE_ID, DUTY_RANGE, IE_RANGE, PHASES } from '../device';
+import { DEFAULT_SIMULATORS } from '../constants/presets';
 import { listRuns, RunPatch, RunRowView, subscribeRuns, updateRun } from '../device/runsApi';
 import { newId } from '../utils/format';
 import { perSecond } from '../utils/telemetry';
@@ -24,19 +25,22 @@ const KEYS = {
   legacySamples: (id: string) => `bbs.samples.${id}`,
 };
 
-export const DEFAULT_SIMULATORS: Simulator[] = [
-  { id: 'sim-adult', name: 'Adult', respiratoryRate: 15, duty: 60, ieRatio: 1 },
-  { id: 'sim-elderly', name: 'Elderly', respiratoryRate: 18, duty: 50, ieRatio: 1 },
-];
+export { DEFAULT_SIMULATORS };
 
-// Simulators saved before blower power existed: keep the name and rate, fix I:E at 1:1.
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// Presets saved by older versions have no mode: they were all breath presets. They keep
+// their name, rate and I:E; a missing rate stays unset (Start then asks for one).
 function migrateSimulator(s: any): Simulator {
+  const mode = s.mode === 'free' ? 'free' : 'breath';
+  const rate = typeof s.respiratoryRate === 'number' ? clamp(Math.round(s.respiratoryRate), BPM_RANGE.min, BPM_RANGE.max) : null;
   return {
     id: s.id,
     name: s.name,
-    respiratoryRate: Math.min(BPM_RANGE.max, Math.max(BPM_RANGE.min, Math.round(s.respiratoryRate ?? 15))),
-    duty: typeof s.duty === 'number' ? s.duty : 60,
-    ieRatio: 1,
+    mode,
+    duty: typeof s.duty === 'number' ? clamp(Math.round(s.duty), DUTY_RANGE.min, DUTY_RANGE.max) : 50,
+    respiratoryRate: mode === 'free' ? null : rate,
+    ieRatio: typeof s.ieRatio === 'number' ? clamp(s.ieRatio, IE_RANGE.min, IE_RANGE.max) : 1,
   };
 }
 
@@ -55,42 +59,46 @@ function migrateSession(s: any): SessionMeta {
   };
 }
 
-// Demo samples on disk: one row of numbers per second (nulls kept for unmeasured values).
-const PHASES: Phase[] = ['idle', 'inhale', 'exhale'];
-type Packed = { v: 2; rows: (number | null)[][] };
+// Demo samples on disk: one row of numbers per second (null kept for missing values).
+// v3 adds duty; v2 rows (before firmware 0.7) have none.
+type Packed = { v: 3; rows: (number | null)[][] };
 
 function packSamples(samples: Sample[]): Packed {
   const r2 = (n: number | null) => (n === null ? null : Math.round(n * 100) / 100);
+  const r0 = (n: number | null) => (n === null ? null : Math.round(n));
   return {
-    v: 2,
+    v: 3,
     rows: samples.map((s) => [
       s.t,
       r2(s.tidalVolume),
       r2(s.pressure),
       r2(s.temperature),
-      Math.round(s.co2Ppm),
-      Math.round(s.co2PeakPpm),
+      r0(s.co2Ppm),
+      r0(s.co2PeakPpm),
       r2(s.humidity),
       Math.round(s.inhaleFan),
-      Math.round(s.exhaleFan),
+      r0(s.exhaleFan),
       PHASES.indexOf(s.phase),
+      r2(s.dutyCmd),
     ]),
   };
 }
 
 function unpackSamples(raw: any): Sample[] {
-  if (raw?.v === 2) {
+  if (raw?.v === 3 || raw?.v === 2) {
+    const v2Phases: Phase[] = ['idle', 'inhale', 'exhale'];
     return raw.rows.map((r: (number | null)[]) => ({
       t: r[0] as number,
       tidalVolume: r[1],
       pressure: r[2],
-      temperature: r[3] as number,
-      co2Ppm: r[4] as number,
-      co2PeakPpm: r[5] as number,
-      humidity: r[6] as number,
-      inhaleFan: r[7] as number,
-      exhaleFan: r[8] as number,
-      phase: PHASES[r[9] as number] ?? 'idle',
+      temperature: r[3],
+      co2Ppm: r[4],
+      co2PeakPpm: r[5],
+      humidity: r[6],
+      inhaleFan: (r[7] as number) ?? 0,
+      exhaleFan: r[8],
+      phase: (raw.v === 3 ? PHASES : v2Phases)[r[9] as number] ?? 'idle',
+      dutyCmd: raw.v === 3 ? r[10] : null,
     }));
   }
   // Legacy layout [t, tidalVolume, pressure, temperature, co2 %, humidity, inhaleFan, exhaleFan].
@@ -105,6 +113,7 @@ function unpackSamples(raw: any): Sample[] {
     inhaleFan: r[6],
     exhaleFan: r[7],
     phase: 'inhale',
+    dutyCmd: null,
   }));
 }
 
@@ -148,6 +157,7 @@ interface DataContextValue {
   folders: Folder[];
   syncError: string | null; // last failed write to Supabase
   addSimulator: (sim: Omit<Simulator, 'id'>) => void;
+  updateSimulator: (id: string, sim: Omit<Simulator, 'id'>) => void;
   deleteSimulator: (id: string) => void;
   resetSimulators: () => void;
   addSession: (meta: SessionMeta, samples: Sample[]) => void; // demo runs
@@ -278,6 +288,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const addSimulator = useCallback((sim: Omit<Simulator, 'id'>) => {
     setSimulators((prev) => [...prev, { ...sim, id: newId('sim') }]);
+  }, []);
+
+  const updateSimulator = useCallback((id: string, sim: Omit<Simulator, 'id'>) => {
+    setSimulators((prev) => prev.map((s) => (s.id === id ? { ...sim, id } : s)));
   }, []);
 
   const deleteSimulator = useCallback((id: string) => {
@@ -437,6 +451,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       folders: store.folders,
       syncError,
       addSimulator,
+      updateSimulator,
       deleteSimulator,
       resetSimulators,
       addSession,
@@ -458,6 +473,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       store.folders,
       syncError,
       addSimulator,
+      updateSimulator,
       deleteSimulator,
       resetSimulators,
       addSession,

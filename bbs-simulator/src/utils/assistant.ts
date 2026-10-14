@@ -1,12 +1,13 @@
 import { Sample, SessionMeta } from '../types';
-import { formatDuration, formatNumber, formatRatio, formatRunMeta } from './format';
+import { formatDuration, formatNumber, formatRunMeta, formatSettings } from './format';
+import { bandFor, DUTY_BANDS_NOTE } from '../constants/dutyBands';
 import { summarize } from './stats';
 import { CO2_WARN_PPM } from './telemetry';
 
 // Rule-based run assistant: matches keywords in the question and answers only from the
 // saved runs' own samples. It never guesses; with no data, it says so.
 
-type Field = 'temperature' | 'co2Ppm' | 'humidity' | 'inhaleFan' | 'exhaleFan';
+type Field = 'inhaleFan' | 'dutyCmd' | 'temperature' | 'co2Ppm' | 'humidity';
 
 interface Metric {
   field: Field;
@@ -17,17 +18,18 @@ interface Metric {
   scale?: number; // stored × scale = shown (CO2 is stored in ppm, shown in %)
 }
 
-// What the device measures today. Tidal volume and peak pressure aren't measured yet, so
+// What the device reports. Missing values (null) are skipped: a sensor that isn't connected
+// gets "not connected", never 0. Tidal volume and peak pressure aren't measured yet, so
 // questions about them get that answer instead of a number.
 const METRICS: Metric[] = [
+  { field: 'inhaleFan', name: 'blower speed', unit: 'rpm', decimals: 0, match: /\b(rpm|blower|fans?|speed)\b/ },
+  { field: 'dutyCmd', name: 'duty', unit: '%', decimals: 0, match: /\b(duty|power)\b/ },
   { field: 'temperature', name: 'temperature', unit: '°C', decimals: 1, match: /\b(temp\w*|hot\w*|warm\w*|cold\w*|cool\w*)\b/ },
   { field: 'co2Ppm', name: 'CO2', unit: '%', decimals: 2, match: /\b(co2|carbon)\b/, scale: 1 / 10000 },
   { field: 'humidity', name: 'humidity', unit: '% RH', decimals: 0, match: /\b(humid\w*|moisture)\b/ },
-  { field: 'inhaleFan', name: 'inhale fan', unit: 'RPM', decimals: 0, match: /\binhale\b/ },
-  { field: 'exhaleFan', name: 'exhale fan', unit: 'RPM', decimals: 0, match: /\bexhale\b/ },
 ];
-const FANS = /\bfans?\b/;
 const UNMEASURED = /\b(tidal|volume|vt|pressure|cmh2o)\b/;
+const value = (s: Sample, m: Metric) => (s[m.field] === null ? null : (s[m.field] as number) * (m.scale ?? 1));
 
 export interface AssistantData {
   runs: SessionMeta[];
@@ -42,11 +44,7 @@ const newestFirst = (runs: SessionMeta[]) => [...runs].sort((a, b) => b.startedA
 const label = (r: SessionMeta) => `"${r.name}" (${formatRunMeta(r)})`;
 
 function metricsIn(t: string): Metric[] {
-  const found = METRICS.filter((m) => m.match.test(t));
-  if (FANS.test(t) && !found.some((m) => m.field === 'inhaleFan' || m.field === 'exhaleFan')) {
-    found.push(...METRICS.filter((m) => m.field === 'inhaleFan' || m.field === 'exhaleFan'));
-  }
-  return found;
+  return METRICS.filter((m) => m.match.test(t));
 }
 
 // Runs named in the question, longest name first so "Adult 2" beats "Adult".
@@ -79,30 +77,50 @@ function targetRun(t: string, d: AssistantData): SessionMeta {
   return d.runs.find((r) => r.id === d.focusId) ?? sorted[0];
 }
 
+// Stats over the values that exist, or null when the run has none (sensor not connected).
 function stats(d: AssistantData, run: SessionMeta, m: Metric) {
-  const rows = d.samples[run.id] ?? [];
-  return rows.length ? summarize(rows.map((s) => s[m.field] * (m.scale ?? 1))) : null;
+  const values = (d.samples[run.id] ?? []).map((s) => value(s, m)).filter((v): v is number => v !== null);
+  return values.length ? summarize(values) : null;
 }
 
+const missing = (m: Metric) =>
+  m.field === 'inhaleFan' || m.field === 'dutyCmd' ? `no ${m.name} readings` : `no ${m.name} readings (sensor not connected)`;
+
 function summary(d: AssistantData, run: SessionMeta): string {
-  const sim = run.simulator;
-  const lines = [
-    `${label(run)} ran the ${sim.name} simulator (${sim.respiratoryRate} bpm, blower ${sim.duty} %, I:E ${formatRatio(sim.ieRatio)}).`,
-  ];
-  const parts = METRICS.map((m) => {
+  const lines = [`${label(run)} ran the ${run.simulator.name} simulator (${formatSettings(run.simulator)}).`];
+  const parts: string[] = [];
+  const absent: string[] = [];
+  for (const m of METRICS) {
     const s = stats(d, run, m);
-    return s && `${m.name} ${fmt(s.avg, m)}`;
-  }).filter(Boolean);
+    if (s) parts.push(`${m.name} ${fmt(s.avg, m)}`);
+    else absent.push(m.name);
+  }
   lines.push(parts.length ? `Averages: ${parts.join(', ')}.` : 'It has no readings saved.');
+  if (absent.length && parts.length) lines.push(`Not connected or not recorded: ${absent.join(', ')}.`);
+  const bands = bandTime(d, run);
+  if (bands) lines.push(bands);
   const check = co2Check(d, run);
   if (check) lines.push(check);
   return lines.join('\n');
 }
 
+// Seconds spent in each duty band while running (open-air bands, see constants/dutyBands).
+function bandTime(d: AssistantData, run: SessionMeta): string | null {
+  const counts = new Map<string, number>();
+  for (const s of d.samples[run.id] ?? []) {
+    if (s.dutyCmd === null || s.phase === 'idle') continue;
+    const label = bandFor(s.dutyCmd).label;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  if (!counts.size) return null;
+  const parts = [...counts].sort((a, b) => b[1] - a[1]).map(([band, sec]) => `${band} ${formatDuration(sec)}`);
+  return `Time in each duty band (1 s averages; ${DUTY_BANDS_NOTE}): ${parts.join(', ')}.`;
+}
+
 // The CO2 sensor (MH-Z16) saturates at 50 000 ppm, so readings above 45 000 may be capped.
 function co2Check(d: AssistantData, run: SessionMeta): string | null {
   const rows = d.samples[run.id] ?? [];
-  const peak = rows.reduce((m, s) => Math.max(m, s.co2PeakPpm), 0);
+  const peak = rows.reduce((m, s) => Math.max(m, s.co2PeakPpm ?? 0), 0);
   if (peak <= CO2_WARN_PPM) return null;
   return `CO2 peaked at ${formatNumber(peak / 10000, 2)} %, near the sensor's 5 % limit, so the highest readings may be capped.`;
 }
@@ -115,21 +133,24 @@ function unusual(d: AssistantData, run: SessionMeta): string {
     return `${label(run)} is too short to spot trends (${rows.length} readings). Record a longer run and ask again.${check ? '\n' + check : ''}`;
   }
   const q = Math.floor(rows.length / 4);
-  const drift = (name: string, unit: Metric, value: (s: Sample) => number) => {
-    const a = summarize(rows.slice(0, q).map(value)).avg;
-    const b = summarize(rows.slice(-q).map(value)).avg;
-    return { m: { ...unit, name }, a, b, pct: a ? ((b - a) / Math.abs(a)) * 100 : 0 };
-  };
-  // The two fans take turns by phase, so each one's average depends on how many inhale vs
-  // exhale seconds fall in a quarter. Their combined output only moves if the blower does.
-  const fan = METRICS.find((m) => m.field === 'inhaleFan')!;
-  const drifts = [
-    ...METRICS.filter((m) => m.field !== 'inhaleFan' && m.field !== 'exhaleFan').map((m) =>
-      drift(m.name, m, (s) => s[m.field] * (m.scale ?? 1))
-    ),
-    drift('fan output', fan, (s) => s.inhaleFan + s.exhaleFan),
-  ].filter((x) => Math.abs(x.pct) >= 5);
+  // In breath runs duty and rpm swing within every breath, so a quarter's average depends on
+  // how many inhale seconds it caught; only free (steady) runs are checked for blower drift.
+  const steady = run.simulator.mode === 'free';
+  const checked = METRICS.filter((m) => steady || (m.field !== 'inhaleFan' && m.field !== 'dutyCmd'));
+  const drifts = checked
+    .map((m) => {
+      const a = stats({ ...d, samples: { [run.id]: rows.slice(0, q) } }, run, m)?.avg ?? null;
+      const b = stats({ ...d, samples: { [run.id]: rows.slice(-q) } }, run, m)?.avg ?? null;
+      return a === null || b === null ? null : { m, a, b, pct: a ? ((b - a) / Math.abs(a)) * 100 : 0 };
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x && Math.abs(x.pct) >= 5);
+  const phaseNote = rows.some((s) => s.phase === 'free_nospin')
+    ? 'The firmware reported "fan not turning" (free_nospin) during this run: check wiring or a stall.'
+    : rows.some((s) => s.phase === 'free_below')
+      ? 'The duty was below 19 % (free_below), so there was no flow.'
+      : null;
   const lines = [`Checked ${label(run)}.`];
+  if (phaseNote) lines.push(phaseNote);
   const check = co2Check(d, run);
   if (check) lines.push(check);
   lines.push(
@@ -137,7 +158,7 @@ function unusual(d: AssistantData, run: SessionMeta): string {
       ? 'Drift from start to end: ' +
           drifts.map((x) => `${x.m.name} ${x.pct > 0 ? 'rose' : 'fell'} ${Math.abs(x.pct).toFixed(0)}% (${fmt(x.a, x.m)} → ${fmt(x.b, x.m)})`).join('; ') +
           '.'
-      : 'Every sensor held steady, within 5% from start to end.'
+      : `Every reading I could check held steady, within 5% from start to end${steady ? '' : ' (breath runs: blower speed and duty swing every breath, so they aren’t checked for drift)'}.`
   );
   return lines.join('\n');
 }
@@ -173,7 +194,7 @@ const VOCAB = [
   'summarise', 'summarize', 'summary', 'overview', 'compare', 'comparison', 'difference', 'versus',
   'highest', 'maximum', 'hottest', 'warmest', 'biggest', 'largest',
   'lowest', 'minimum', 'coolest', 'coldest', 'smallest',
-  'tidal', 'volume', 'pressure', 'temperature', 'carbon', 'humidity', 'moisture', 'inhale', 'exhale',
+  'tidal', 'volume', 'pressure', 'temperature', 'carbon', 'humidity', 'moisture', 'blower', 'speed', 'bands',
   'unusual', 'problem', 'problems', 'anomaly', 'stable', 'steady', 'normal',
   'which', 'first', 'oldest', 'across', 'session', 'sessions', 'earliest', 'latest', 'newest', 'recent', 'previous',
 ];
@@ -181,6 +202,7 @@ const VOCAB = [
 const COMMON = [
   'what', 'that', 'this', 'with', 'from', 'have', 'were', 'does', 'your', 'mine', 'show', 'list',
   'last', 'least', 'most', 'must', 'peak', 'temp', 'fans', 'runs', 'help', 'many', 'much', 'tell',
+  'duty', 'band', 'free', 'flow', 'mode', 'power',
   'about', 'issue', 'issues', 'drift', 'weird', 'wrong', 'okay',
   'time', 'rate', 'give', 'each', 'were', 'recap', 'there', 'their', 'compared',
 ];
@@ -222,7 +244,7 @@ function correctTypos(t: string, runs: SessionMeta[]): string {
 }
 
 export const HELP =
-  'I answer from your saved runs. Try:\n• "Summarise my last run"\n• "Compare my last two runs"\n• "Which run had the highest CO2?"\n• "Temperature in my first run"\n• "Anything unusual?"';
+  'I answer from your saved runs. Try:\n• "Summarise my last run"\n• "Compare my last two runs"\n• "Which run had the highest rpm?"\n• "Time in each duty band"\n• "Anything unusual?"';
 
 export function reply(question: string, d: AssistantData): string {
   const t = correctTypos(question.toLowerCase().trim(), d.runs);
@@ -244,6 +266,14 @@ export function reply(question: string, d: AssistantData): string {
   }
 
   const metrics = metricsIn(t);
+
+  if (/\blag\b/.test(t)) {
+    return 'The blower lags the commanded duty by about 0.6 s. Saved runs keep 1 s averages, which can’t resolve a lag that short, so I don’t report it. Watch it on the live chart during a run (duty and rpm are plotted together).';
+  }
+
+  if (/\b(band|bands)\b/.test(t) && !metrics.length) {
+    return bandTime(d, targetRun(t, d)) ?? 'That run has no duty readings (recorded before firmware 0.7), so I can’t place it in bands.';
+  }
 
   if (!metrics.length && UNMEASURED.test(t)) {
     return 'Tidal volume and peak pressure aren’t measured yet by this device, so I can’t report them. Tidal volume will later be estimated from the fan RPM.';
@@ -278,7 +308,7 @@ export function reply(question: string, d: AssistantData): string {
     return metrics
       .map((m) => {
         const s = stats(d, run, m);
-        if (!s) return `${label(run)} has no ${m.name} readings.`;
+        if (!s) return `${label(run)} has ${missing(m)}.`;
         if (high) return `Highest ${m.name} in ${label(run)}: ${fmt(s.max, m)}.`;
         if (low) return `Lowest ${m.name} in ${label(run)}: ${fmt(s.min, m)}.`;
         return `${m.name[0].toUpperCase() + m.name.slice(1)} in ${label(run)}: min ${fmt(s.min, m)}, avg ${fmt(s.avg, m)}, max ${fmt(s.max, m)}.`;

@@ -2,7 +2,7 @@ import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { fs, colors, font, themedStyles } from '../theme';
 import { Sample, SensorKey } from '../types';
-import { sensorByKey, seriesValue } from '../constants/sensors';
+import { presentSeries, SeriesDef, sensorByKey, seriesValue } from '../constants/sensors';
 import { graphSeries, summarize } from '../utils/stats';
 import { formatAxis, formatNumber } from '../utils/format';
 import { LineGraph } from './waves';
@@ -30,7 +30,11 @@ export function SensorPanel({
     return <Text style={styles.noData}>No readings were recorded for this run.</Text>;
   }
 
-  const co2Saturated = sensor === 'co2' && samples.some((s) => s.co2PeakPpm > CO2_WARN_PPM);
+  const series = presentSeries(def, samples);
+  if (!series.length) {
+    return <Text style={styles.noData}>{def.missing}</Text>;
+  }
+  const co2Saturated = sensor === 'co2' && samples.some((s) => (s.co2PeakPpm ?? 0) > CO2_WARN_PPM);
 
   return (
     <View>
@@ -45,28 +49,28 @@ export function SensorPanel({
             height={206}
             duration={duration}
             unit={def.unit}
-            series={def.series.map((s, i) => ({
+            series={series.map((s, i) => ({
               ...graphSeries(t, samples.map((x) => seriesValue(s, x))),
               color: seriesColors()[i],
             }))}
           />
-          {def.series.length > 1 && (
+          {series.length > 1 && (
             <View style={styles.legend}>
-              {def.series.map((s, i) => (
+              {series.map((s, i) => (
                 <View key={s.field} style={styles.legendItem}>
                   <View style={[styles.legendDot, { backgroundColor: seriesColors()[i] }]} />
-                  <Text style={styles.axisText}>{s.statLabel.replace(' RPM', '')}</Text>
+                  <Text style={styles.axisText}>{s.statLabel}</Text>
                 </View>
               ))}
             </View>
           )}
         </>
       ) : (
-        <SensorTable samples={samples} sensor={sensor} />
+        <SensorTable samples={samples} sensor={sensor} series={series} />
       )}
 
-      <View style={[styles.stats, def.series.length > 1 && styles.statsTight]}>
-        {def.series.map((s) => {
+      <View style={[styles.stats, series.length > 1 && styles.statsTight]}>
+        {series.map((s) => {
           const sum = summarize(samples.map((x) => seriesValue(s, x)));
           return (
             <View key={s.field} style={styles.statRow}>
@@ -88,7 +92,7 @@ export function SensorPanel({
 
 // Table view has no Figma frame; it reuses the graph card's shape so the toggle
 // swaps content without the layout jumping.
-function SensorTable({ samples, sensor }: { samples: Sample[]; sensor: SensorKey }) {
+function SensorTable({ samples, sensor, series }: { samples: Sample[]; sensor: SensorKey; series: SeriesDef[] }) {
   const def = sensorByKey(sensor);
   const every = Math.max(1, Math.ceil(samples.length / 120));
   const rows = samples.filter((_, i) => i % every === 0);
@@ -96,9 +100,9 @@ function SensorTable({ samples, sensor }: { samples: Sample[]; sensor: SensorKey
     <View style={styles.table}>
       <View style={[styles.tr, styles.th]}>
         <Text style={[styles.cell, styles.head]}>Time</Text>
-        {def.series.map((s) => (
+        {series.map((s) => (
           <Text key={s.field} style={[styles.cell, styles.head, styles.num]}>
-            {def.series.length > 1 ? s.statLabel.replace(' RPM', '') : def.unit}
+            {series.length > 1 ? s.statLabel : def.unit}
           </Text>
         ))}
       </View>
@@ -107,11 +111,14 @@ function SensorTable({ samples, sensor }: { samples: Sample[]; sensor: SensorKey
         {rows.map((r) => (
           <View key={r.t} style={styles.tr}>
             <Text style={styles.cell}>{formatAxis(r.t)}</Text>
-            {def.series.map((s) => (
-              <Text key={s.field} style={[styles.cell, styles.num]}>
-                {formatNumber(seriesValue(s, r), def.decimals)}
-              </Text>
-            ))}
+            {series.map((s) => {
+              const v = seriesValue(s, r);
+              return (
+                <Text key={s.field} style={[styles.cell, styles.num]}>
+                  {v === null ? '–' : formatNumber(v, def.decimals)}
+                </Text>
+              );
+            })}
           </View>
         ))}
       </ScrollView>

@@ -1,12 +1,12 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase } from '../lib/supabase';
 import { Phase } from '../types';
-import { Backend, CommandRecord, DEVICE_ID, DeviceStatus, TelemetryRow } from './types';
+import { Backend, CommandRecord, DEVICE_ID, DeviceStatus, PHASES, TelemetryRow } from './types';
 
 // The real device, through the ESP4902 Supabase project: it writes `telemetry` and
 // `device_status` and acks `commands`; the app reads those via Realtime and inserts commands.
 
-const TELEMETRY_COLUMNS = 'id, sampled_at, phase, rpm_inhale, rpm_exhale, co2_ppm, temp_c, rh_pct';
+const TELEMETRY_COLUMNS = 'id, sampled_at, phase, duty_cmd, rpm_inhale, rpm_exhale, co2_ppm, temp_c, rh_pct';
 const PAGE = 1000; // PostgREST's default row cap per request
 const SUBSCRIBE_TIMEOUT_MS = 8000;
 
@@ -19,9 +19,14 @@ function parseTs(v: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+// Every firmware phase is kept (free-flow runs report free, free_kick, free_below, free_sat or
+// free_nospin, and are all running). Only a value the app doesn't know becomes idle.
 function toPhase(v: unknown): Phase {
-  return v === 'inhale' || v === 'exhale' ? v : 'idle';
+  return PHASES.includes(v as Phase) ? (v as Phase) : 'idle';
 }
+
+// Keep a missing value missing: a sensor that isn't wired must not read as 0.
+const num = (v: unknown): number | null => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
 
 function toTelemetry(r: any): TelemetryRow | null {
   const sampledAt = parseTs(r.sampled_at);
@@ -30,11 +35,12 @@ function toTelemetry(r: any): TelemetryRow | null {
     id: r.id,
     sampledAt,
     phase: toPhase(r.phase),
-    rpmInhale: Number(r.rpm_inhale) || 0,
-    rpmExhale: Number(r.rpm_exhale) || 0,
-    co2Ppm: Number(r.co2_ppm) || 0,
-    tempC: Number(r.temp_c) || 0,
-    rhPct: Number(r.rh_pct) || 0,
+    dutyCmd: num(r.duty_cmd),
+    rpmInhale: num(r.rpm_inhale) ?? 0,
+    rpmExhale: num(r.rpm_exhale),
+    co2Ppm: num(r.co2_ppm),
+    tempC: num(r.temp_c),
+    rhPct: num(r.rh_pct),
   };
 }
 
@@ -110,7 +116,14 @@ export function createSupabaseBackend(): Backend {
 
       // The newest row, however old, tells us the current phase even if nothing arrived lately.
       const [latest, recent] = await Promise.all([
-        sb.from('telemetry').select(TELEMETRY_COLUMNS).eq('device_id', DEVICE_ID).order('sampled_at', { ascending: false }).limit(1),
+        // Rows without sampled_at (one old batch) would sort first in a descending order, so skip them.
+        sb
+          .from('telemetry')
+          .select(TELEMETRY_COLUMNS)
+          .eq('device_id', DEVICE_ID)
+          .not('sampled_at', 'is', null)
+          .order('sampled_at', { ascending: false })
+          .limit(1),
         sb
           .from('telemetry')
           .select(TELEMETRY_COLUMNS)

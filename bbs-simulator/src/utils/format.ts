@@ -48,6 +48,13 @@ export function formatRunMeta(run: { startedAt: number; durationSec: number; end
   return `${formatDateSgt(run.startedAt)} · ${run.endedAt === null ? 'recording' : formatDuration(run.durationSec)}`;
 }
 
+// "15 bpm · peak 50 % · I:E 1:2" or "Free flow, 50 %".
+export function formatSettings(sim: { mode: 'breath' | 'free'; duty: number; respiratoryRate: number | null; ieRatio: number }): string {
+  if (sim.mode === 'free') return `Free flow, ${sim.duty} %`;
+  const rate = sim.respiratoryRate === null ? 'rate not set' : `${sim.respiratoryRate} bpm`;
+  return `${rate} · peak ${sim.duty} % · I:E ${formatRatio(sim.ieRatio)}`;
+}
+
 export function formatRatio(ie: number): string {
   return `1:${Number.isInteger(ie) ? ie : ie.toFixed(1)}`;
 }

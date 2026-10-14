@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 import { RunDetails, SessionMeta } from '../types';
 import { fs, colors, font, themedStyles } from '../theme';
-import { formatRatio, formatTimeSgt } from '../utils/format';
+import { formatSettings, formatTimeSgt } from '../utils/format';
 import { Field, LinkText, PillButton } from './basics';
 import { Dialog } from './controls';
 
@@ -41,7 +41,7 @@ export function RunDetailsCard({ run, onSave }: { run: SessionMeta; onSave: (d: 
     ['Headform', run.headform],
     ['Mask', run.mask],
     ['Notes', run.notes],
-    ['Settings', `${sim.respiratoryRate} bpm · blower ${sim.duty} % · I:E ${formatRatio(sim.ieRatio)}`],
+    ['Settings', formatSettings(sim)],
     ['Firmware', run.firmware],
     ['Time', ended],
   ];

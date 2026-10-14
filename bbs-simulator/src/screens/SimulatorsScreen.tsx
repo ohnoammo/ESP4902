@@ -12,7 +12,9 @@ import { useData } from '../state/DataContext';
 import { useRun } from '../state/RunContext';
 import { fs, colors, font, themedStyles, type } from '../theme';
 import { Simulator } from '../types';
-import { formatRatio } from '../utils/format';
+import { formatRatio, formatSettings } from '../utils/format';
+import { BandPill } from '../components/BandPill';
+import { bandFor } from '../constants/dutyBands';
 import * as svgs from '../assets/svgs';
 
 export function SimulatorsScreen({ navigation }: NativeStackScreenProps<HomeStackParams, 'Simulators'>) {
@@ -49,7 +51,7 @@ export function SimulatorsScreen({ navigation }: NativeStackScreenProps<HomeStac
                   setOpenId(null);
                   deleteSimulator(sim.id);
                 }}
-                label={`${sim.name}: ${sim.respiratoryRate} breaths per minute, blower ${sim.duty} percent, I to E ${formatRatio(sim.ieRatio)}${running ? ', recording' : ''}`}
+                label={`${sim.name}: ${formatSettings(sim)}, ${bandFor(sim.duty).label}${running ? ', recording' : ''}`}
               >
                 <SimulatorCard sim={sim} running={running} />
               </SwipeToDelete>
@@ -84,10 +86,20 @@ function SimulatorCard({ sim, running }: { sim: Simulator; running: boolean }) {
         </View>
       </View>
       <View style={styles.stats}>
-        <Stat value={`${sim.respiratoryRate} bpm`} label="resp. rate" />
-        <Stat value={`${sim.duty} %`} label="blower" />
-        <Stat value={formatRatio(sim.ieRatio)} label="I:E ratio" />
+        {sim.mode === 'free' ? (
+          <>
+            <Stat value={`${sim.duty} %`} label="fixed duty" />
+            <Stat value="Free" label="continuous" />
+          </>
+        ) : (
+          <>
+            <Stat value={`${sim.duty} %`} label="peak duty" />
+            <Stat value={sim.respiratoryRate === null ? '–' : `${sim.respiratoryRate} bpm`} label={sim.respiratoryRate === null ? 'rate not set' : 'resp. rate'} />
+            <Stat value={formatRatio(sim.ieRatio)} label="I:E ratio" />
+          </>
+        )}
       </View>
+      <BandPill duty={sim.duty} style={styles.band} />
     </View>
   );
 }
@@ -122,7 +134,8 @@ const styles = themedStyles(() => ({
   cardName: { ...font.bold, fontSize: fs(26), color: colors.text, flexShrink: 1 },
   cardWave: { marginRight: 23, marginTop: -2 },
   // 105pt columns in the 393pt frame; they narrow on smaller phones.
-  stats: { flexDirection: 'row', marginTop: 32, paddingRight: 12 },
+  stats: { flexDirection: 'row', marginTop: 26, paddingRight: 12 },
+  band: { marginTop: 12 },
   stat: { flex: 1, maxWidth: 105 },
   statValue: { ...font.bold, fontSize: fs(20), color: colors.text },
   statLabel: { ...font.regular, fontSize: fs(13), color: colors.subtle, marginTop: 3 },

@@ -24,13 +24,18 @@ tabs: **Home** (simulators), **Sessions**, **Settings**.
   start is pending, while the device is offline, or while it is already running. Stop is never
   disabled. All times are shown in Singapore time.
 
-- **Home:** a simulator is a preset of respiratory rate (5–40 bpm) and blower power (0–100 %);
-  I:E is fixed at 1:1 by the current firmware. Tap one (Ready), then **Start**: recording begins
-  when the telemetry shows the device breathing, and ends on **Stop** or when the device reports
-  idle (e.g. its failsafe, ~10 s after losing the network). The live view charts the last 20 s of
-  fan RPM; tidal volume and peak pressure show "Not measured yet". **Details** shows the live
-  sensors (CO2 in %, from ppm; a warning above 45 000 ppm, where the MH-Z16 nears saturation).
-  Swipe a simulator card left to delete it.
+- **Home:** a simulator is a preset in one of two modes (firmware blower-0.7):
+  **Breathing** (peak duty 20–100 % over the 20 % floor, rate 5–40 bpm, I:E 1:1 to 1:4) or
+  **Free flow** (one fixed duty, 0–100 %). Each shows its duty band (15 V, open air;
+  `src/constants/dutyBands.ts`). A breath preset needs a sourced breathing rate before it can start;
+  the default presets are in `src/constants/presets.ts` (Free flow 50 %; Walking / light waits for
+  the team's rate; Heavy is held back). Tap one (Ready, with **Edit**), then **Start**: recording
+  begins when the telemetry shows the device running, and ends on **Stop** or when the device
+  reports idle (e.g. its failsafe, ~10 s after losing the network). The live view charts commanded
+  duty and blower rpm together over the last 20 s, with banners for the firmware's free-flow
+  states; tidal volume and peak pressure show "Not measured yet". **Details** shows the live
+  readings; sensors the firmware doesn't send show "Not connected" (CO2 is in %, from ppm, with a
+  warning above 45 000 ppm). Swipe a simulator card left to delete it.
 - **Stop** saves the run and opens it in Sessions: Graph/Table, sensor chips, min/avg/max,
   rename (pencil icon), Export CSV.
 - **Sessions:** swipe a run left to delete it. Hold a run and drag it to reorder it or drop it

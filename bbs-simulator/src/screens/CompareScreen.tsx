@@ -27,7 +27,7 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
   const found = ids.map((id) => sessions.find((s) => s.id === id));
   const [data, setData] = useState<Sample[][] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [sensor, setSensor] = useState<SensorKey>('temp');
+  const [sensor, setSensor] = useState<SensorKey>('blower');
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -46,12 +46,17 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
   }
   const runs = found as SessionMeta[];
   const def = sensorByKey(sensor);
-  // Fans compare the inhale fan, the series the design uses for single-line views.
+  // Compare the sensor's main series (for Blower: the main blower's rpm).
   const series = def.series[0];
   const duration = Math.max(...runs.map((r) => r.durationSec));
-  const stats = data?.map((samples) => summarize(samples.map((s) => seriesValue(series, s))));
-  const unitLabel = def.key === 'fans' ? 'inhale RPM' : def.unit;
-  const fmt = (v: number) => formatNumber(v, def.decimals);
+  // Per run: stats over the values that exist, or null when the run has none.
+  const stats = data?.map((samples) => {
+    const values = samples.map((s) => seriesValue(series, s)).filter((v): v is number => v !== null);
+    return values.length ? summarize(values) : null;
+  });
+  const anyData = !!stats?.some((s) => s !== null);
+  const unitLabel = def.unit;
+  const fmt = (v: number | undefined) => (v === undefined ? '–' : formatNumber(v, def.decimals));
   const signed = (v: number) => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v))}`;
 
   const onExport = async () => {
@@ -87,7 +92,8 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
           </View>
 
           {!data && <Text style={type.meta}>{loadError ? `Couldn't load the readings: ${loadError}` : 'Loading readings…'}</Text>}
-          {data && (
+          {data && !anyData && <Text style={type.meta}>{def.missing}</Text>}
+          {data && anyData && (
             <LineGraph
               height={200}
               duration={duration}
@@ -103,19 +109,19 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
             <SensorChips value={sensor} onChange={setSensor} />
           </View>
 
-          {stats && runs.length === 2 && (
+          {stats && anyData && runs.length === 2 && (
             // Two runs: the Figma layout, one column per run.
             <View style={styles.table}>
-              <PairRow label={`Average ${unitLabel}`} a={fmt(stats[0].avg)} b={fmt(stats[1].avg)} />
-              <PairRow label={`Peak ${unitLabel}`} a={fmt(stats[0].max)} b={fmt(stats[1].max)} />
+              <PairRow label={`Average ${unitLabel}`} a={fmt(stats[0]?.avg)} b={fmt(stats[1]?.avg)} />
+              <PairRow label={`Peak ${unitLabel}`} a={fmt(stats[0]?.max)} b={fmt(stats[1]?.max)} />
               <View style={[styles.row, { borderBottomWidth: 0 }]}>
                 <Text style={styles.rowLabel}>Difference</Text>
-                <Text style={[styles.rowValue, { color: colors.accentText }]}>{signed(stats[0].avg - stats[1].avg)}</Text>
+                <Text style={[styles.rowValue, { color: colors.accentText }]}>{stats[0] && stats[1] ? signed(stats[0].avg - stats[1].avg) : '–'}</Text>
               </View>
             </View>
           )}
 
-          {stats && runs.length > 2 && (
+          {stats && anyData && runs.length > 2 && (
             // Three or more runs don't fit as columns, so each run gets a row instead.
             <View style={styles.table}>
               <View style={styles.row}>
@@ -131,14 +137,17 @@ export function CompareScreen({ navigation, route }: NativeStackScreenProps<Sess
                       {r.name}
                     </Text>
                   </View>
-                  <Text style={styles.rowValue}>{fmt(stats[i].avg)}</Text>
-                  <Text style={styles.rowValue}>{fmt(stats[i].max)}</Text>
+                  <Text style={styles.rowValue}>{fmt(stats[i]?.avg)}</Text>
+                  <Text style={styles.rowValue}>{fmt(stats[i]?.max)}</Text>
                 </View>
               ))}
               <View style={[styles.row, { borderBottomWidth: 0 }]}>
                 <Text style={styles.rowLabel}>Spread of averages</Text>
                 <Text style={[styles.rowValue, { color: colors.accentText }]}>
-                  {fmt(Math.max(...stats.map((s) => s.avg)) - Math.min(...stats.map((s) => s.avg)))}
+                  {(() => {
+                    const avgs = stats.filter((s): s is NonNullable<typeof s> => s !== null).map((s) => s.avg);
+                    return avgs.length > 1 ? fmt(Math.max(...avgs) - Math.min(...avgs)) : '–';
+                  })()}
                 </Text>
               </View>
             </View>

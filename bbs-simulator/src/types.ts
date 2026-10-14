@@ -1,29 +1,37 @@
-// A saved preset of what to send the device. The firmware takes only `bpm` (5–40) and
-// `duty` (blower power, 0–100 %); I:E is fixed at 1:1 in the current firmware but kept
-// here so the UI and future firmware can use it.
+// Breath: a half-sine inhale up to a peak duty, then exhale held at the 20 % floor.
+// Free: one fixed duty, continuous flow.
+export type SimMode = 'breath' | 'free';
+
+// A saved preset of what to send the device (firmware blower-0.7).
 export interface Simulator {
   id: string;
   name: string;
-  respiratoryRate: number; // breaths per minute, sent as `bpm`
-  duty: number; // blower power %, sent as `duty`
-  ieRatio: number; // exhale part of 1:X; always 1 for now
+  mode: SimMode;
+  duty: number; // breath: PEAK duty of the inhale (%); free: the fixed duty (%)
+  // Breath only. A breath preset must have a rate before it can start: null means "not set"
+  // (the team supplies sourced rates; the app never invents one).
+  respiratoryRate: number | null; // sent as `bpm`
+  ieRatio: number; // E/I, exhale part of 1:X (1 to 4), sent as `ie_ratio`; ignored in free mode
 }
 
-export type Phase = 'inhale' | 'exhale' | 'idle';
+// Firmware phases. Everything except 'idle' is a run in progress: 'free_below' and
+// 'free_nospin' are runs with zero flow, not stopped runs.
+export type Phase = 'idle' | 'inhale' | 'exhale' | 'free' | 'free_kick' | 'free_below' | 'free_sat' | 'free_nospin';
 
-// One second of readings (telemetry arrives at 10 Hz and is averaged per second for
-// display). Tidal volume and peak pressure aren't measured yet: they stay null until the
-// firmware (or an RPM-based estimate) provides them.
+// One second of readings (telemetry arrives at up to 10 Hz and is averaged per second for
+// display). null means no value: not measured yet (tidal volume, peak pressure) or the
+// sensor isn't connected (CO2, temperature, humidity and the second blower in 0.7).
 export interface Sample {
   t: number; // seconds since the run started
-  tidalVolume: number | null; // mL
-  pressure: number | null; // cmH2O
-  temperature: number; // °C
-  co2Ppm: number; // ppm, average over the second
-  co2PeakPpm: number; // ppm, highest raw reading in the second (saturation check)
-  humidity: number; // % RH
-  inhaleFan: number; // RPM
-  exhaleFan: number; // RPM
+  tidalVolume: number | null; // mL, not measured yet
+  pressure: number | null; // cmH2O, not measured yet
+  temperature: number | null; // °C
+  co2Ppm: number | null; // ppm, average over the second
+  co2PeakPpm: number | null; // ppm, highest raw reading in the second (saturation check)
+  humidity: number | null; // % RH
+  dutyCmd: number | null; // % actually written to the PWM
+  inhaleFan: number; // blower RPM (the inhale/main blower)
+  exhaleFan: number | null; // RPM of the second blower, once wired
   phase: Phase; // phase at the end of the second
 }
 
@@ -56,4 +64,4 @@ export interface Folder {
   name: string;
 }
 
-export type SensorKey = 'temp' | 'co2' | 'humidity' | 'fans';
+export type SensorKey = 'blower' | 'duty' | 'co2' | 'temp' | 'humidity';

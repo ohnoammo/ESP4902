@@ -9,11 +9,12 @@ import { useRun } from '../state/RunContext';
 import { useDevice } from '../state/DeviceContext';
 import { fs, colors, font, themedStyles, type } from '../theme';
 import { formatNumber, formatTimeSgt } from '../utils/format';
-import { CO2_WARN_PPM, ppmToPercent } from '../utils/telemetry';
+import { CO2_WARN_PPM, meanOf, ppmToPercent } from '../utils/telemetry';
 
 // Live sensor values. Slow signals (temperature, CO2, humidity) are averaged over the newest
-// second of telemetry (it arrives at 10 Hz). Fan speeds are shown as the newest reading:
-// the fans take turns by phase, so a 1 s average would blend a running and a stopped fan.
+// second of telemetry; duty and rpm are the newest reading (the breath duty swings within a
+// second, so an average would hide it). A sensor the firmware doesn't send shows
+// "Not connected", never 0.
 export function SensorsScreen({ navigation }: NativeStackScreenProps<HomeStackParams, 'Sensors'>) {
   const top = useTopInset();
   const insets = useSafeAreaInsets();
@@ -25,26 +26,37 @@ export function SensorsScreen({ navigation }: NativeStackScreenProps<HomeStackPa
     if (!rows.length) return null;
     const end = rows[rows.length - 1].sampledAt;
     const last = rows.filter((r) => r.sampledAt > end - 1000);
-    const avg = (f: (r: (typeof last)[number]) => number) => last.reduce((s, r) => s + f(r), 0) / last.length;
+    const co2 = last.map((r) => r.co2Ppm).filter((v): v is number => v !== null);
+    const newest = rows[rows.length - 1];
     return {
       at: end,
-      temp: avg((r) => r.tempC),
-      co2: avg((r) => r.co2Ppm),
-      co2Peak: Math.max(...last.map((r) => r.co2Ppm)),
-      rh: avg((r) => r.rhPct),
-      inhale: rows[rows.length - 1].rpmInhale,
-      exhale: rows[rows.length - 1].rpmExhale,
+      temp: meanOf(last.map((r) => r.tempC)),
+      co2: meanOf(co2),
+      co2Peak: co2.length ? Math.max(...co2) : null,
+      rh: meanOf(last.map((r) => r.rhPct)),
+      duty: newest.dutyCmd,
+      rpm: newest.rpmInhale,
+      rpm2: newest.rpmExhale,
     };
   }, [version, buffer]);
 
   const rows: { label: string; value: string; sub?: string; muted?: boolean }[] = second
     ? [
         { label: 'Phase', value: latest?.phase ?? '–' },
-        { label: 'Temperature', value: `${formatNumber(second.temp, 1)} °C` },
-        { label: 'CO2', value: `${formatNumber(ppmToPercent(second.co2), 2)} %`, sub: `${formatNumber(second.co2, 0)} ppm` },
-        { label: 'Humidity', value: `${formatNumber(second.rh, 0)} % RH` },
-        { label: 'Inhale fan', value: `${formatNumber(second.inhale, 0)} RPM` },
-        { label: 'Exhale fan', value: `${formatNumber(second.exhale, 0)} RPM` },
+        { label: 'Duty', value: second.duty === null ? '–' : `${formatNumber(second.duty, 0)} %`, sub: 'commanded' },
+        { label: 'Blower', value: `${formatNumber(second.rpm, 0)} rpm` },
+        second.rpm2 === null
+          ? { label: 'Second blower', value: 'Not connected', muted: true }
+          : { label: 'Second blower', value: `${formatNumber(second.rpm2, 0)} rpm` },
+        second.co2 === null
+          ? { label: 'CO2', value: 'Not connected', muted: true }
+          : { label: 'CO2', value: `${formatNumber(ppmToPercent(second.co2), 2)} %`, sub: `${formatNumber(second.co2, 0)} ppm` },
+        second.temp === null
+          ? { label: 'Temperature', value: 'Not connected', muted: true }
+          : { label: 'Temperature', value: `${formatNumber(second.temp, 1)} °C` },
+        second.rh === null
+          ? { label: 'Humidity', value: 'Not connected', muted: true }
+          : { label: 'Humidity', value: `${formatNumber(second.rh, 0)} % RH` },
         { label: 'Tidal volume', value: 'Not measured yet', muted: true },
         { label: 'Peak pressure', value: 'Not measured yet', muted: true },
       ]
@@ -63,7 +75,7 @@ export function SensorsScreen({ navigation }: NativeStackScreenProps<HomeStackPa
           <Text style={[type.meta, styles.recording]}>Not recording</Text>
         )}
         <DeviceStatusLine style={styles.status} />
-        {second && second.co2Peak > CO2_WARN_PPM && (
+        {second && second.co2Peak !== null && second.co2Peak > CO2_WARN_PPM && (
           <Text style={styles.warning}>
             CO2 is above 4.5 %. The MH-Z16 sensor saturates at 5 % (50 000 ppm), so readings may be capped.
           </Text>

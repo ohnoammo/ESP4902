@@ -1,4 +1,6 @@
-export function summarize(values: number[]) {
+// Missing values (null) are skipped everywhere: a sensor that isn't connected adds nothing.
+export function summarize(all: (number | null)[]) {
+  const values = all.filter((v): v is number => v !== null);
   if (!values.length) return { min: 0, avg: 0, max: 0 };
   let min = Infinity;
   let max = -Infinity;
@@ -44,7 +46,15 @@ export function smooth(v: number[], radius: number): number[] {
   });
 }
 
-export function graphSeries(t: number[], v: number[], maxPoints = 160) {
+export function graphSeries(tAll: number[], vAll: (number | null)[], maxPoints = 160) {
+  const t: number[] = [];
+  const v: number[] = [];
+  vAll.forEach((x, i) => {
+    if (x !== null) {
+      t.push(tAll[i]);
+      v.push(x);
+    }
+  });
   const d = downsample(t, v, maxPoints);
   return { t: d.t, v: smooth(d.v, 2) };
 }

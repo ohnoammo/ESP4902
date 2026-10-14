@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { LayoutChangeEvent, StyleSheet, View } from 'react-native';
 import Svg, { Line, Path, Text as SvgText } from 'react-native-svg';
-import { volumeAt } from '../mock/breathing';
+import { dutyAt } from '../mock/breathing';
 import { fs, colors, font, themedStyles } from '../theme';
 import { Simulator } from '../types';
 import { formatAxis } from '../utils/format';
@@ -84,51 +84,68 @@ export function SineWave({
   );
 }
 
-// Breathing-pattern preview on the Ready screen: the idealised curve for the chosen rate
-// and I:E, drawn over a fixed 8 s window scrolling right-to-left, so a faster rate visibly
-// packs in more breaths. It shows the settings, not measured data, so it has no y scale.
+// Commanded-duty preview on the Ready screen: the duty the firmware will write (half-sine
+// from the 20 % floor to the peak during inhale, then the floor; or a flat line in free mode),
+// over a fixed 8 s window scrolling right-to-left. It is the command, not airflow, so it is drawn
+// on a 0–100 % duty scale. A breath preset with no rate set shows nothing.
 export function BreathWave({
   pattern,
   height,
   windowSec = 8,
 }: {
-  pattern: Pick<Simulator, 'respiratoryRate' | 'ieRatio'>;
+  pattern: Pick<Simulator, 'mode' | 'duty' | 'respiratoryRate' | 'ieRatio'>;
   height: number;
   windowSec?: number;
 }) {
-  const now = useFrameClock();
+  const now = useFrameClock(30, pattern.mode === 'breath');
   const { width, onLayout } = useWidth();
-  const padX = 37;
-  const padY = 6;
-  const plotW = Math.max(1, width - padX * 2);
+  const padLeft = 52;
+  const padRight = 24;
+  const padY = 8;
+  const plotW = Math.max(1, width - padLeft - padRight);
+  const y = (duty: number) => padY + (1 - duty / 100) * (height - padY * 2);
   let d = '';
   for (let x = 0; x <= plotW; x += 3) {
-    const v = volumeAt(pattern, now - windowSec + (x / plotW) * windowSec);
-    d += `${d ? 'L' : 'M'}${(padX + x).toFixed(1)} ${(padY + (1 - v) * (height - padY * 2)).toFixed(1)}`;
+    const v = dutyAt(pattern, now - windowSec + (x / plotW) * windowSec);
+    if (v === null) break;
+    d += `${d ? 'L' : 'M'}${(padLeft + x).toFixed(1)} ${y(v).toFixed(1)}`;
   }
+  const axisText = { fill: colors.muted, fontSize: fs(12), fontFamily: font.regular.fontFamily };
   return (
     <View
       style={{ height }}
       onLayout={onLayout}
       accessible
-      accessibilityLabel={`Breathing pattern preview, ${pattern.respiratoryRate} breaths per minute`}
+      accessibilityLabel={
+        pattern.mode === 'free'
+          ? `Commanded duty: continuous ${pattern.duty} percent`
+          : `Commanded duty: half-sine to ${pattern.duty} percent, ${pattern.respiratoryRate ?? 'rate not set'} breaths per minute`
+      }
     >
       <Svg width={width} height={height}>
-        <Path d={d} stroke={colors.strong} strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        {[100, 50, 0].map((v) => (
+          <React.Fragment key={v}>
+            <Line x1={padLeft} x2={width - padRight} y1={y(v)} y2={y(v)} stroke={colors.gridLine} strokeWidth={1} strokeDasharray="3 4" />
+            <SvgText x={padLeft - 8} y={y(v) + 4} textAnchor="end" {...axisText}>
+              {`${v}%`}
+            </SvgText>
+          </React.Fragment>
+        ))}
+        {d ? <Path d={d} stroke={colors.strong} strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" fill="none" /> : null}
       </Svg>
     </View>
   );
 }
 
-// Static thumbnail of a simulator's pattern for the Home cards: the same volume curve and
-// 8 s window as BreathWave, sized and stroked like the Figma card icon.
+// Static thumbnail of a preset's commanded duty for the Home cards (same shape and 8 s window
+// as BreathWave, 0–100 % scale), sized and stroked like the Figma card icon.
 export function MiniBreathWave({
   pattern,
   width = 93.5,
   height = 31.5,
   windowSec = 8,
 }: {
-  pattern: Pick<Simulator, 'respiratoryRate' | 'ieRatio'>;
+  pattern: Pick<Simulator, 'mode' | 'duty' | 'respiratoryRate' | 'ieRatio'>;
   width?: number;
   height?: number;
   windowSec?: number;
@@ -136,13 +153,14 @@ export function MiniBreathWave({
   const pad = 1.75; // half the stroke, so peaks aren't clipped
   let d = '';
   for (let x = 0; x <= width - pad * 2; x += 1) {
-    const v = volumeAt(pattern, (x / (width - pad * 2)) * windowSec);
-    const y = pad + (1 - v) * (height - pad * 2);
+    const v = dutyAt(pattern, (x / (width - pad * 2)) * windowSec);
+    if (v === null) break;
+    const y = pad + (1 - v / 100) * (height - pad * 2);
     d += `${d ? 'L' : 'M'}${(pad + x).toFixed(1)} ${y.toFixed(1)}`;
   }
   return (
     <Svg width={width} height={height} pointerEvents="none">
-      <Path d={d} stroke={colors.strong} strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      {d ? <Path d={d} stroke={colors.strong} strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round" fill="none" /> : null}
     </Svg>
   );
 }
@@ -175,6 +193,7 @@ export function LineGraph({
   unit,
   strokeWidth = 3.5,
   xLabels,
+  yRange,
 }: {
   series: GraphSeries[];
   duration: number;
@@ -182,11 +201,12 @@ export function LineGraph({
   unit: string;
   strokeWidth?: number;
   xLabels?: [string, string]; // default "0:00" and the duration
+  yRange?: [number, number]; // fixed y scale instead of fitting the data
 }) {
   const { width, onLayout } = useWidth(330);
   const all = series.flatMap((s) => s.v);
-  let lo = all.length ? Math.min(...all) : 0;
-  let hi = all.length ? Math.max(...all) : 1;
+  let lo = yRange ? yRange[0] : all.length ? Math.min(...all) : 0;
+  let hi = yRange ? yRange[1] : all.length ? Math.max(...all) : 1;
   if (hi - lo < 1e-6) {
     lo -= 1;
     hi += 1;

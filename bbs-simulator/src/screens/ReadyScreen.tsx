@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { BackButton, Field, PrimaryButton, Screen, useTopInset } from '../components/basics';
+import { BackButton, Field, LinkText, PrimaryButton, Screen, useTopInset } from '../components/basics';
+import { BandPill } from '../components/BandPill';
+import { breathLimitation } from '../constants/dutyBands';
 import { BreathWave } from '../components/waves';
 import { DeviceStatusLine, UnrecordedRunCard } from '../components/DeviceStatus';
 import { HomeStackParams } from '../navigation/types';
@@ -14,9 +16,9 @@ import { formatRatio } from '../utils/format';
 // What to tell the user about the latest Start, by its outcome.
 const START_MESSAGES: Partial<Record<CommandOutcome, string>> = {
   pending: 'Start sent. Waiting for the device…',
-  done: 'The device confirmed Start. Waiting for it to begin breathing…',
+  done: 'The device confirmed Start. Waiting for it to start running…',
   'no-response': 'No response from device.',
-  error: 'The device didn’t recognise the command.',
+  error: 'Device rejected the command.',
   expired: 'Start expired, device was unreachable. Press again.',
 };
 
@@ -69,10 +71,12 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
           : running
             ? 'Device is already running'
             : 'Start';
-  const disabled = !thisRunning && (otherRunning || starting || !online || running);
+  // A breath preset can't start without a breathing rate (the database requires one).
+  const rateMissing = sim.mode === 'breath' && sim.respiratoryRate === null;
+  const disabled = !thisRunning && (otherRunning || starting || !online || running || rateMissing);
   const showOutcome = startOutcome && (startedHere || (startOutcome !== 'pending' && startOutcome !== 'done'));
-  const message = startError ?? (showOutcome ? START_MESSAGES[startOutcome!] : null);
-  const problem = !!startError || startOutcome === 'expired' || startOutcome === 'error' || startOutcome === 'no-response';
+  const message = rateMissing && !thisRunning ? 'Set the respiratory rate first.' : (startError ?? (showOutcome ? START_MESSAGES[startOutcome!] : null));
+  const problem = rateMissing || !!startError || startOutcome === 'expired' || startOutcome === 'error' || startOutcome === 'no-response';
 
   return (
     <Screen>
@@ -87,6 +91,7 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
           <Text style={[type.hero, styles.title, { fontSize: heroSize(sim.name) }]} numberOfLines={2} accessibilityRole="header">
             {sim.name}
           </Text>
+          {!thisRunning && <LinkText label="Edit" onPress={() => navigation.navigate('NewSimulator', { simulatorId: sim.id })} />}
         </View>
         <DeviceStatusLine style={styles.status} />
         <UnrecordedRunCard />
@@ -94,13 +99,30 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
         <View style={styles.wave}>
           <BreathWave pattern={sim} height={124} />
         </View>
-        <Text style={styles.preview}>Preview of this pattern</Text>
+        <Text style={styles.preview}>
+          {sim.mode === 'free' ? 'Commanded duty · Continuous flow' : rateMissing ? 'Commanded duty · set a rate to preview' : 'Commanded duty (not airflow)'}
+        </Text>
 
         <View style={styles.params}>
-          <ParamRow label="Respiratory rate" value={String(sim.respiratoryRate)} unit="bpm" />
-          <ParamRow label="Blower power" value={String(sim.duty)} unit="%" />
-          <ParamRow label="I:E ratio" value={formatRatio(sim.ieRatio)} note="Fixed 1:1 in current firmware" />
+          {sim.mode === 'free' ? (
+            <>
+              <ParamRow label="Mode" value="Free flow" />
+              <ParamRow label="Duty" value={String(sim.duty)} unit="%" />
+            </>
+          ) : (
+            <>
+              <ParamRow label="Peak duty" value={String(sim.duty)} unit="%" note="Exhale holds the 20 % floor" />
+              <ParamRow
+                label="Respiratory rate"
+                value={sim.respiratoryRate === null ? 'Not set' : String(sim.respiratoryRate)}
+                unit={sim.respiratoryRate === null ? undefined : 'bpm'}
+              />
+              <ParamRow label="I:E ratio" value={formatRatio(sim.ieRatio)} />
+            </>
+          )}
         </View>
+        <BandPill duty={sim.duty} note style={styles.band} />
+        {breathLimitation(sim) && <Text style={styles.limitation}>{breathLimitation(sim)}</Text>}
 
         {!thisRunning && (
           <View style={styles.details}>
@@ -187,6 +209,8 @@ const styles = themedStyles(() => ({
   detailsTitle: { ...font.bold, fontSize: fs(14), color: colors.muted, marginLeft: 6 },
   notes: { height: undefined, minHeight: 72, paddingTop: 12, textAlignVertical: 'top' },
   start: { marginTop: 18 },
+  band: { marginHorizontal: 37, marginTop: 14 },
+  limitation: { ...font.regular, fontSize: fs(13), lineHeight: fs(18), color: colors.text, marginHorizontal: 24, marginTop: 12, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: colors.warning },
   message: { ...font.regular, fontSize: fs(14), lineHeight: fs(20), color: colors.muted, marginHorizontal: 37, marginTop: 12, textAlign: 'center' },
   problem: { ...font.bold, color: colors.danger },
 }));

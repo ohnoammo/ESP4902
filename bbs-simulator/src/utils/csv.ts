@@ -3,7 +3,7 @@ import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { CSV_COLUMNS } from '../constants/sensors';
 import { Sample, SessionMeta } from '../types';
-import { formatTimestampSgt } from './format';
+import { formatSettings, formatTimestampSgt } from './format';
 
 function escape(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
@@ -11,13 +11,13 @@ function escape(value: string): string {
 
 export function buildCsv(runs: { meta: SessionMeta; samples: Sample[] }[]): string {
   const multi = runs.length > 1;
-  const header = [...(multi ? ['Run'] : []), 'Sampled at (SGT)', ...CSV_COLUMNS.map((c) => c.label)];
+  const header = [...(multi ? ['Run'] : []), 'Settings', 'Sampled at (SGT)', ...CSV_COLUMNS.map((c) => c.label)];
   const rows = [header.join(',')];
   for (const { meta, samples } of runs) {
     for (const s of samples) {
       const cells = CSV_COLUMNS.map((c) => c.value(s));
       const at = formatTimestampSgt(meta.startedAt + s.t * 1000);
-      rows.push([...(multi ? [escape(meta.name)] : []), at, ...cells].join(','));
+      rows.push([...(multi ? [escape(meta.name)] : []), escape(formatSettings(meta.simulator)), at, ...cells].join(','));
     }
   }
   return rows.join('\n');

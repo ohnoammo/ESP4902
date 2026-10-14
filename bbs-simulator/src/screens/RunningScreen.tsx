@@ -5,15 +5,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BackButton, Icon, PrimaryButton, RecordingStatus, Screen, useTopInset } from '../components/basics';
 import { LineGraph } from '../components/waves';
 import { DeviceStatusLine } from '../components/DeviceStatus';
+import { BandPill, StateBanner } from '../components/BandPill';
+import { PHASE_BANNERS } from '../constants/dutyBands';
 import { HomeStackParams } from '../navigation/types';
 import { useRun } from '../state/RunContext';
 import { useDevice } from '../state/DeviceContext';
 import { fs, colors, font, heroSize, themedStyles, type } from '../theme';
-import { formatClock } from '../utils/format';
+import { formatClock, formatNumber, formatSettings } from '../utils/format';
 import { CO2_WARN_PPM } from '../utils/telemetry';
 import * as svgs from '../assets/svgs';
 
 const LIVE_WINDOW_SEC = 20;
+// rpm is drawn as % of the rig's top speed (100 % duty, 15 V, open air) so it shares the duty
+// axis: the gap between the two lines is the blower's lag behind the command.
+const MAX_RPM = 20100;
 
 export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackParams, 'Running'>) {
   const top = useTopInset();
@@ -22,16 +27,17 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
   const { buffer, version, latest, stale, online } = useDevice();
   const [stopping, setStopping] = useState(false);
 
-  // Last LIVE_WINDOW_SEC of fan speeds, rebuilt only when the buffer changes (~3 Hz).
+  // Last LIVE_WINDOW_SEC of commanded duty and blower rpm against sampled_at (not arrival
+  // time: rows come in ~1 s batches, ~1 s late). Rebuilt only when the buffer changes (~3 Hz).
   const live = useMemo(() => {
     const rows = buffer.current;
     const end = rows.length ? rows[rows.length - 1].sampledAt : Date.now();
     const from = end - LIVE_WINDOW_SEC * 1000;
     const recent = rows.filter((r) => r.sampledAt >= from);
-    const t = recent.map((r) => (r.sampledAt - from) / 1000);
+    const withDuty = recent.filter((r) => r.dutyCmd !== null);
     return [
-      { t, v: recent.map((r) => r.rpmInhale), color: colors.strong },
-      { t, v: recent.map((r) => r.rpmExhale), color: colors.seriesA },
+      { t: withDuty.map((r) => (r.sampledAt - from) / 1000), v: withDuty.map((r) => r.dutyCmd as number), color: colors.seriesA },
+      { t: recent.map((r) => (r.sampledAt - from) / 1000), v: recent.map((r) => (r.rpmInhale / MAX_RPM) * 100), color: colors.strong },
     ];
   }, [version, buffer]);
 
@@ -66,7 +72,8 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
     setStopping(false);
     if (id) openRecording(id);
   };
-  const co2High = !!latest && latest.co2Ppm > CO2_WARN_PPM;
+  const co2High = !!latest && latest.co2Ppm !== null && latest.co2Ppm > CO2_WARN_PPM;
+  const banner = latest && !stale ? PHASE_BANNERS[latest.phase] : undefined;
 
   return (
     <Screen>
@@ -88,12 +95,14 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
           </Pressable>
         </View>
         <DeviceStatusLine style={styles.status} />
+        <Text style={styles.settings}>{formatSettings(sim)}</Text>
 
         <Text style={styles.clock} accessibilityLabel={`Elapsed ${formatClock(elapsed)}`}>
           {formatClock(elapsed)}
         </Text>
         <RecordingStatus style={styles.recording} />
 
+        {banner && <StateBanner text={banner.text} level={banner.level} style={styles.banner} />}
         {(stale || !online) && (
           <Text style={[styles.warning, styles.warningDanger]} accessibilityLiveRegion="polite">
             No live data from the device. If it lost the network it stops by itself within ~10 s; the run ends when it
@@ -102,20 +111,25 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
         )}
         {co2High && (
           <Text style={styles.warning} accessibilityLiveRegion="polite">
-            CO2 is above 4.5 % ({Math.round(latest!.co2Ppm).toLocaleString('en-US')} ppm). The sensor saturates at 5 %, so readings may be capped.
+            CO2 is above 4.5 % ({Math.round(latest!.co2Ppm!).toLocaleString('en-US')} ppm). The sensor saturates at 5 %, so readings may be capped.
           </Text>
         )}
 
         <View style={styles.chart}>
-          <LineGraph height={190} duration={LIVE_WINDOW_SEC} unit="RPM" series={live} xLabels={[`−${LIVE_WINDOW_SEC} s`, 'now']} />
+          <LineGraph height={190} duration={LIVE_WINDOW_SEC} unit="%" series={live} xLabels={[`−${LIVE_WINDOW_SEC} s`, 'now']} yRange={[0, 100]} />
           <View style={styles.legend}>
-            <Legend color={colors.strong} label="inhale fan" />
-            <Legend color={colors.seriesA} label="exhale fan" />
+            <Legend color={colors.seriesA} label="duty commanded" />
+            <Legend color={colors.strong} label={`rpm (% of ${MAX_RPM.toLocaleString('en-US')})`} />
           </View>
         </View>
 
         <View style={styles.readings}>
-          <Reading value={String(sim.respiratoryRate)} unit="bpm" />
+          <Reading value={latest && !stale ? formatNumber(latest.rpmInhale, 0) : '–'} unit="rpm" />
+          <Reading value={latest && !stale && latest.dutyCmd !== null ? formatNumber(latest.dutyCmd, 0) : '–'} unit="% duty" />
+          <Reading value={latest && !stale ? latest.phase : '–'} unit="phase" small />
+        </View>
+        <BandPill duty={sim.duty} note style={styles.band} />
+        <View style={styles.readings}>
           <Reading value="–" unit="mL" note="Tidal volume not measured yet" />
           <Reading value="–" unit="cmH2O" note="Peak pressure not measured yet" />
         </View>
@@ -142,10 +156,12 @@ function Legend({ color, label }: { color: string; label: string }) {
   );
 }
 
-function Reading({ value, unit, note }: { value: string; unit: string; note?: string }) {
+function Reading({ value, unit, note, small }: { value: string; unit: string; note?: string; small?: boolean }) {
   return (
     <View style={styles.reading} accessible accessibilityLabel={note ?? `${value} ${unit}`}>
-      <Text style={[styles.readingValue, note && styles.readingMuted]}>{value}</Text>
+      <Text style={[styles.readingValue, small && styles.readingSmall, note && styles.readingMuted]} numberOfLines={1}>
+        {value}
+      </Text>
       <Text style={styles.readingUnit}>{unit}</Text>
       {note && <Text style={styles.readingNote}>Not measured yet</Text>}
     </View>
@@ -156,6 +172,9 @@ const styles = themedStyles(() => ({
   titleRow: { flexDirection: 'row', alignItems: 'center', marginTop: 11, paddingLeft: 37, paddingRight: 14 },
   title: { flex: 1 },
   status: { marginLeft: 37, marginRight: 24, marginTop: 4 },
+  settings: { ...font.regular, fontSize: fs(14), color: colors.muted, marginLeft: 37, marginTop: 4 },
+  banner: { marginHorizontal: 24, marginTop: 14 },
+  band: { marginHorizontal: 37, marginTop: 14 },
   details: { flexDirection: 'row', alignItems: 'center', gap: 13 },
   detailsText: { ...font.bold, fontSize: fs(16), color: colors.accentText, marginRight: -13 },
   clock: { ...font.bold, fontSize: fs(40), color: colors.text, textAlign: 'center', marginTop: 32, fontVariant: ['tabular-nums'] },
@@ -181,6 +200,7 @@ const styles = themedStyles(() => ({
   readings: { flexDirection: 'row', paddingHorizontal: 37, marginTop: 28, gap: 12 },
   reading: { flex: 1 },
   readingValue: { ...font.regular, fontSize: fs(26), color: colors.text },
+  readingSmall: { fontSize: fs(17), lineHeight: fs(31) },
   readingMuted: { color: colors.muted },
   readingUnit: { ...font.regular, fontSize: fs(15), color: colors.muted, marginTop: 7 },
   readingNote: { ...font.regular, fontSize: fs(12), color: colors.muted, marginTop: 2 },

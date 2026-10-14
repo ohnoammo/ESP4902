@@ -23,7 +23,7 @@ export function SessionScreen({ navigation, route }: NativeStackScreenProps<Sess
   const [samples, setSamples] = useState<Sample[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<'graph' | 'table'>('graph');
-  const [sensor, setSensor] = useState<SensorKey>('temp');
+  const [sensor, setSensor] = useState<SensorKey>('blower');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [exporting, setExporting] = useState(false);

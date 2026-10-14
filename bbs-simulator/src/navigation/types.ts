@@ -2,7 +2,7 @@ import { NavigatorScreenParams } from '@react-navigation/native';
 
 export type HomeStackParams = {
   Simulators: undefined;
-  NewSimulator: undefined;
+  NewSimulator: { simulatorId?: string } | undefined; // with an id: edit that simulator
   Ready: { simulatorId: string };
   Running: undefined;
   Sensors: undefined;

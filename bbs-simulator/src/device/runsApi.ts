@@ -1,6 +1,6 @@
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getSupabase } from '../lib/supabase';
-import { RunDetails, SessionMeta } from '../types';
+import { RunDetails, SessionMeta, SimMode } from '../types';
 import { DEVICE_ID } from './types';
 
 // Live runs: rows in the Supabase `runs` table. A run holds its time range, settings and
@@ -9,7 +9,7 @@ import { DEVICE_ID } from './types';
 // kept on the phone (DataContext), not here.
 
 const COLUMNS =
-  'id, name, device_id, started_at, ended_at, ended_by, bpm, duty, ie_ratio, firmware, headform, mask, notes, archived';
+  'id, name, device_id, mode, started_at, ended_at, ended_by, bpm, duty, ie_ratio, firmware, headform, mask, notes, archived';
 
 const ts = (v: unknown): number | null => {
   if (typeof v !== 'string' || !v) return null;
@@ -33,7 +33,13 @@ export function toRun(r: any): RunRowView {
   return {
     id: String(r.id),
     name: r.name,
-    simulator: { name: r.name, respiratoryRate: r.bpm, duty: r.duty, ieRatio: Number(r.ie_ratio) || 1 },
+    simulator: {
+      name: r.name,
+      mode: r.mode === 'free' ? 'free' : 'breath',
+      duty: r.duty,
+      respiratoryRate: r.bpm ?? null,
+      ieRatio: Number(r.ie_ratio) || 1,
+    },
     deviceId: r.device_id,
     startedAt,
     endedAt,
@@ -74,9 +80,10 @@ export async function findOpenRun(): Promise<RunRowView | null> {
 export interface NewRun extends RunDetails {
   name: string;
   startedAt: number;
-  bpm: number;
+  mode: SimMode;
+  bpm: number | null; // required for breath runs (the database enforces it), null for free
   duty: number;
-  ieRatio: number;
+  ieRatio: number | null; // null for free runs
   firmware: string | null;
   startCommandId: number | string | null;
 }
@@ -87,9 +94,10 @@ export async function insertRun(run: NewRun): Promise<RunRowView> {
     .insert({
       name: run.name.trim().slice(0, 40) || 'Run',
       started_at: new Date(run.startedAt).toISOString(),
-      bpm: run.bpm,
+      mode: run.mode,
+      bpm: run.mode === 'free' ? null : run.bpm,
       duty: run.duty,
-      ie_ratio: run.ieRatio,
+      ie_ratio: run.mode === 'free' ? null : run.ieRatio,
       firmware: run.firmware,
       headform: text(run.headform),
       mask: text(run.mask),
