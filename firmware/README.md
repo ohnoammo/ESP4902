@@ -11,8 +11,10 @@ The header comment in `esp4902_final.ino` lists the tasks, control loop, command
 - Copy `secrets.example.h` to `secrets.h` (git-ignored) and fill in WiFi and the Supabase
   **publishable** key.
 - **Before flashing:** apply `../supabase/migrations/20261111_final_pressure.sql` (adds
-  `telemetry.pressure_hpa`). Until it is applied, every telemetry batch is rejected. To run
-  without it, set `SEND_PRESSURE = false`.
+  `telemetry.pressure_hpa` and `telemetry.active_fan`). Until it is applied, every telemetry
+  batch is rejected. To run without it, set `SEND_NEW_COLUMNS = false`.
+- **Free flow:** `{"mode":"free","duty":50,"fan":"exhale"}` runs one fan (`inhale` by default)
+  at a fixed duty until stop. Below 25 % from rest it kicks at 25 % for 1 s.
 - Presets (start by name): `demo_15` (default, peak 15 L/min, within both fans), `walk_slow`,
   `walk_fast`, `light_f`, `light_m`. All but `demo_15` are above the exhale fan's ~17 L/min, so
   their exhale peaks clip (fault 3).
@@ -20,12 +22,13 @@ The header comment in `esp4902_final.ino` lists the tasks, control loop, command
 ```json
 { "command": "start", "params": { "mode": "flow", "preset": "walk_slow" } }
 { "command": "start", "params": { "mode": "flow", "vt": 0.3, "bpm": 15, "ie_ratio": 1 } }
+{ "command": "start", "params": { "mode": "free", "duty": 50, "fan": "inhale" } }
 { "command": "stop",  "params": {} }
 ```
 
 Presets go by name because `commands_params_check` casts `bpm` to an integer (20.5 is refused).
-The final firmware only runs flow breaths: a start without a preset or Vt/bpm runs `demo_15`,
-so the app blocks free-flow and duty-breath starts when the device reports `final-…`.
+The final firmware runs flow breaths and free flow, not the old duty breath (`mode: breath`):
+that start would run `demo_15`, so the app blocks it when the device reports `final-…`.
 
 ## `esp4902_twin/` (blower-0.8-twin, superseded)
 

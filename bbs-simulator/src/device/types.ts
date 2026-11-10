@@ -1,5 +1,5 @@
 import { TWIN_PRESETS, VT_RANGE } from '../constants/twin';
-import { Phase } from '../types';
+import { FanSide, Phase } from '../types';
 
 // The device contract, shared by the Supabase backend (real device) and the demo
 // backend (simulated). See DEVICE_INTEGRATION.md for the tables behind it.
@@ -19,6 +19,7 @@ export interface TelemetryRow {
   tempC: number | null; // BME280
   rhPct: number | null; // BME280
   pressureHpa: number | null; // BME280, ambient (needs migration 20261111_final_pressure)
+  activeFan: FanSide | null; // fan being driven (final-1.0-twin, same migration); null when idle or unknown
   twin: TwinSample | null; // null when the firmware doesn't run the twin (0.7 and earlier)
 }
 
@@ -38,6 +39,16 @@ export interface TwinSample {
   fault: 0 | 1 | 2 | 3 | null; // ok, no spin, trim saturated, target above fan capacity
 }
 
+// Sign of a row's twin flows (q_target / q_twin are magnitudes): + inhale, − exhale. Flow
+// breaths take it from the phase; free flow from the fan that runs (inhale when unknown).
+export const flowSign = (r: Pick<TelemetryRow, 'phase' | 'activeFan'>) =>
+  r.phase === 'exhale' || (r.phase.startsWith('free') && r.activeFan === 'exhale') ? -1 : 1;
+
+// RPM of the fan being driven: the exhale fan when telemetry says so (or, without active_fan,
+// in the exhale phase), else the inhale fan.
+export const drivenRpm = (r: Pick<TelemetryRow, 'phase' | 'activeFan' | 'rpmInhale' | 'rpmExhale'>) =>
+  (r.activeFan === 'exhale' || (r.activeFan === null && r.phase === 'exhale')) && r.rpmExhale !== null ? r.rpmExhale : r.rpmInhale;
+
 export const PHASES: Phase[] = ['idle', 'inhale', 'exhale', 'free', 'free_kick', 'free_below', 'free_sat', 'free_nospin'];
 
 // The `device_status` row: a heartbeat every 5 s while the device is on the network.
@@ -55,7 +66,7 @@ export type CommandStatus = 'pending' | 'done' | 'error' | 'expired';
 // sends bpm, duty and ie_ratio; free sends mode and duty (bpm and I:E are ignored).
 export type StartParams =
   | { mode: 'breath'; bpm: number; duty: number; ie_ratio: number }
-  | { mode: 'free'; duty: number }
+  | { mode: 'free'; duty: number; fan?: FanSide }
   // Flow-based breath driven by the twin (needs twin firmware): Vt in L.
   | { mode: 'flow'; vt: number; bpm: number; ie_ratio: number }
   // A built-in breathing preset, by the firmware's id. Sent by name because some presets

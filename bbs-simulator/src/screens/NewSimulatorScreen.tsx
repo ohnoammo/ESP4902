@@ -10,7 +10,7 @@ import { flowCheck, flowPeakDuty, PEAK_STATUS_LABEL, VT_RANGE } from '../constan
 import { HomeStackParams } from '../navigation/types';
 import { useData } from '../state/DataContext';
 import { fs, colors, font, themedStyles, type } from '../theme';
-import { SimMode } from '../types';
+import { FanSide, SimMode } from '../types';
 import { formatNumber } from '../utils/format';
 import { BPM_RANGE, DUTY_RANGE } from '../device';
 
@@ -38,6 +38,7 @@ export function NewSimulatorScreen({ navigation, route }: NativeStackScreenProps
   const [duty, setDuty] = useState(editing?.mode === 'free' ? editing.duty : 50);
   const [respiratoryRate, setRespiratoryRate] = useState<number | null>(editing?.respiratoryRate ?? null);
   const [vt, setVt] = useState<number | null>(editing?.vt ?? null);
+  const [fan, setFan] = useState<FanSide>(editing?.fan ?? 'inhale');
 
   const flow = mode === 'flow';
   const rateMissing = flow && respiratoryRate === null;
@@ -50,7 +51,7 @@ export function NewSimulatorScreen({ navigation, route }: NativeStackScreenProps
     if (!valid) return;
     const sim = flow
       ? { name: name.trim(), mode, vt, respiratoryRate, ieRatio: 1, duty: flowPeakDuty(vt!, respiratoryRate!) }
-      : { name: name.trim(), mode, duty, respiratoryRate: null, ieRatio: 1 };
+      : { name: name.trim(), mode, duty, fan, respiratoryRate: null, ieRatio: 1 };
     if (editing) updateSimulator(editing.id, sim);
     else addSimulator(sim);
     navigation.goBack();
@@ -138,10 +139,25 @@ export function NewSimulatorScreen({ navigation, route }: NativeStackScreenProps
               </Text>
             </>
           ) : (
+            <>
+            <View style={styles.mode}>
+              <SegmentedToggle<FanSide>
+                options={[
+                  { key: 'inhale', label: 'Inhale fan' },
+                  { key: 'exhale', label: 'Exhale fan' },
+                ]}
+                value={fan}
+                onChange={setFan}
+              />
+            </View>
+            <Text style={styles.settingNote}>
+              {fan === 'inhale' ? 'Sucks air in through the headform, continuously.' : 'Blows air out through the headform, continuously.'}
+            </Text>
             <Setting label="Duty" value={`${duty} %`}>
               <Slider {...RANGES.freeDuty} value={duty} onChange={setDuty} accessibilityLabel="Duty" />
               <BandPill duty={duty} note style={styles.band} />
             </Setting>
+            </>
           )}
         </ScrollView>
         <PrimaryButton

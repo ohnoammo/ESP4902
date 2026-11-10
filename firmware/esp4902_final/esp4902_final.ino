@@ -21,11 +21,21 @@
   Commands (public.commands)
     start {"preset":"demo_15"}                  demo_15 | walk_slow | walk_fast | light_f | light_m
     start {"vt":0.5, "bpm":14}                  custom (also accepts "mode":"flow" from the app)
+    start {"mode":"free","duty":50,"fan":"exhale"}  free flow: one fan at a fixed duty until stop
+                                                fan "inhale" (default) or "exhale"
     start {} or unknown preset                  demo_15 (low-duty default)
     optional "breaths": n (default 10, 0 = run until stop)
     stop                                         both fans off
     A 'start' older than COMMAND_TTL_S is marked 'expired' and not run (v4 FIX 7).
-    Out-of-range vt (0.1..2.5 L) or bpm (5..40) -> 'error', nothing runs.
+    Out-of-range vt (0.1..2.5 L), bpm (5..40) or free duty (0..100) -> 'error', nothing runs.
+
+  Free flow (mode "free")
+    The chosen fan at a fixed duty, the other held off, until stop (no breath count). From rest, a
+    duty below 25 % first kicks at 25 % for 1 s. Phases: free, free_kick, free_sat (100 %),
+    free_nospin (fault 1: commanded, no tach for 2 s), free_below (duty 0). The twin reports the
+    installed-calibration flow at the measured rpm; q_target / rpm_expected are what the table
+    expects at that duty. No trim: free flow is open loop by design. Serial Q_target / Q_twin are
+    negative on the exhale fan; telemetry says which fan in active_fan.
 
   Serial CSV, 115200, 10 Hz while running (non-CSV lines start with '#'):
     act,breath,t_ms,phase,Q_target,duty,trim,rpm,rpm_exp,Q_twin,valid,fault
@@ -33,12 +43,14 @@
 
   telemetry columns written (identical keys every row; null where not applicable)
     device_id, sampled_at, phase, duty_cmd, rpm_inhale, rpm_exhale, temp_c, rh_pct, pressure_hpa,
-    q_target, q_twin, rpm_expected, trim, twin_valid, fault
+    q_target, q_twin, rpm_expected, trim, twin_valid, fault, active_fan
     q_target / q_twin are MAGNITUDES (L/min), as the existing columns are defined; the sign comes
-    from phase ('inhale' +, 'exhale' -). pressure_hpa needs the migration
+    from phase ('inhale' +, 'exhale' -), or in free flow from active_fan.
+    active_fan = the fan being driven ('inhale' / 'exhale', null when idle).
+    pressure_hpa and active_fan need the migration
     supabase/migrations/20261111_final_pressure.sql (NOT applied yet). Until it is applied,
-    PostgREST rejects every telemetry batch that carries pressure_hpa: set SEND_PRESSURE to
-    false to run before the migration.
+    PostgREST rejects every telemetry batch that carries them: set SEND_NEW_COLUMNS to false to
+    run before the migration (the app then shows exhale free flow as inhale).
 
   Libraries   ArduinoJson v7, Adafruit BME280 (+ Adafruit Unified Sensor)
   Board       ESP32S3 Dev Module, Arduino core 3.x
@@ -62,7 +74,7 @@ const char* SUPABASE_URL = SECRET_SUPABASE_URL;
 const char* SUPABASE_KEY = SECRET_SUPABASE_KEY;
 const char* DEVICE_ID    = "sim01";
 const char* FW_VERSION   = "final-1.0-twin";   // the app enables its flow controls on "twin"
-const bool  SEND_PRESSURE = true;               // needs migration 20261111_final_pressure
+const bool  SEND_NEW_COLUMNS = true;            // pressure_hpa, active_fan: need migration 20261111
 
 // ---------------- PINS (verified 10 Nov 2026) ----------------
 const int PWM_IN = 17, TACH_IN = 4, EN_IN = 6;   // inhale fan (left)
@@ -103,6 +115,8 @@ const Activity ACTS[N_ACT] = {
   {"light_m",   1.25f,  20.0f},   // peak 78.5 L/min
 };
 const int ACT_CUSTOM = -1;
+const int ACT_FREE   = -3;             // free flow (fixed duty)
+const uint32_t KICK_MS = 1000;        // free flow: kick at 25 % from rest below 25 %
 
 // ---------------- INSTALLED CALIBRATION (15 V, sealed, 10 Nov 2026) ----------------
 const int N_CAL = 10;
@@ -128,7 +142,8 @@ struct Sample {
   int8_t  act;               // preset index, ACT_CUSTOM
   int16_t breath;
   uint32_t tMs;              // since run start
-  char    phase;             // 'i' inhale, 'e' exhale, '-' idle
+  const char* phase;         // telemetry phase (string literal): inhale, exhale, idle, free...
+  const char* fan;           // driven fan: "inhale", "exhale", nullptr when idle
   float   qTarget, duty, trim, rpm, rpmExp, qTwin;   // qTarget/qTwin signed; NAN = null
   int     rpmIn, rpmEx;
   int8_t  valid, fault;      // -1 = null
@@ -138,8 +153,10 @@ struct Sample {
 struct Command {
   long  id;
   char  name[16];
-  int8_t act;                // preset index or ACT_CUSTOM
+  int8_t act;                // preset index, ACT_CUSTOM or ACT_FREE
   float vt, bpm;
+  float duty;                // free flow only
+  bool  fanEx;               // free flow: true = exhale fan
   int   breaths;
 };
 
@@ -149,6 +166,8 @@ struct Ack {
   bool  running;
   int8_t act;
   float vt, bpm, qPeak;
+  float duty;                // free flow
+  bool  fanEx;
 };
 
 QueueHandle_t sampleQ, logQ, cmdQ, ackQ;
@@ -186,7 +205,7 @@ time_t parseIsoUtc(const char* s) {
   return mktime(&t);
 }
 
-const char* actName(int8_t a) { return a >= 0 ? ACTS[a].name : "custom"; }
+const char* actName(int8_t a) { return a >= 0 ? ACTS[a].name : a == ACT_FREE ? "free" : "custom"; }
 
 // Tach: period between pulses; a pulse < 1.5 ms after the last is a glitch.
 void IRAM_ATTR isrIn() { uint32_t t = micros(), p = t - IN.last; if (p > 1500) { IN.per = p; IN.last = t; } }
@@ -229,6 +248,18 @@ float twinFlow(const Fan &f, float rpm) {
   return interp(rpm, f.rpm, f.q, N_CAL);
 }
 
+// Free flow: what the installed table expects from a fan at a duty (scaled below 25 %).
+float flowAtDuty(const Fan &f, float d) {
+  if (d <= 0) return 0;
+  if (d < CAL_DUTY[0]) return f.q[0] * d / CAL_DUTY[0];
+  return interp(d, CAL_DUTY, f.q, N_CAL);
+}
+float rpmAtDuty(const Fan &f, float d) {
+  if (d <= 0) return 0;
+  if (d < CAL_DUTY[0]) return f.rpm[0] * d / CAL_DUTY[0];
+  return interp(d, CAL_DUTY, f.rpm, N_CAL);
+}
+
 // =================================================================
 //  CORE 1. CONTROL TASK  (no Serial, no network, never blocks)
 // =================================================================
@@ -240,6 +271,9 @@ void controlTask(void*) {
   int      nBreaths = N_BREATHS_DEFAULT;
   uint32_t runStart = 0, step = 0;
   float    noSpin = 0, rpmExpPrev = 0;
+  float    freeDuty = 0;
+  bool     freeEx = false;                // free flow on the exhale fan
+  bool     kick = false;                  // free flow: kick-start pending from rest
   const float dt = CTRL_PERIOD_MS / 1000.0f;
 
   for (;;) {
@@ -249,7 +283,19 @@ void controlTask(void*) {
     Command c;
     while (xQueueReceive(cmdQ, &c, 0) == pdTRUE) {
       bool ok = true;
-      if (strcmp(c.name, "start") == 0) {
+      if (strcmp(c.name, "start") == 0 && c.act == ACT_FREE) {
+        if (!(c.duty >= 0 && c.duty <= 100)) {
+          ok = false;                     // nothing runs
+        } else {
+          act = ACT_FREE; freeDuty = c.duty; freeEx = c.fanEx;
+          Fan &ff = freeEx ? EX : IN;
+          kick = freeDuty > 0 && freeDuty < CAL_DUTY[0] && readRpm(ff) < ff.rpm[0];
+          drive(freeEx ? IN : EX, 0);
+          running = true;
+          runStart = millis();
+          noSpin = 0; rpmExpPrev = 0;
+        }
+      } else if (strcmp(c.name, "start") == 0) {
         float v = c.act >= 0 ? ACTS[c.act].vt_L : c.vt;
         float f = c.act >= 0 ? ACTS[c.act].bpm  : c.bpm;
         if (!(v >= VT_MIN && v <= VT_MAX) || !(f >= BPM_MIN && f <= BPM_MAX)) {
@@ -267,7 +313,7 @@ void controlTask(void*) {
       } else {
         ok = false;
       }
-      Ack a = { c.id, ok, running, act, vt, bpm, PI * vt * bpm };
+      Ack a = { c.id, ok, running, act, vt, bpm, act == ACT_FREE ? 0 : PI * vt * bpm, freeDuty, freeEx };
       if (xQueueSend(ackQ, &a, 0) != pdTRUE) droppedAcks++;
     }
 
@@ -283,10 +329,39 @@ void controlTask(void*) {
     s.act = act;
     s.qTarget = s.trim = s.rpm = s.rpmExp = s.qTwin = NAN;
     s.valid = s.fault = -1;
-    s.phase = '-';
+    s.phase = "idle";
 
-    // 3. Fans
-    if (running) {
+    // 3a. Free flow: the chosen fan at a fixed duty, the other off, until stop
+    if (running && act == ACT_FREE) {
+      Fan &ff = freeEx ? EX : IN;
+      const float sign = freeEx ? -1 : 1;                         // + inhale, - exhale
+      uint32_t tRun = now - runStart;
+      float rpm = readRpm(ff);
+      float duty = freeDuty;
+      const char* ph = freeDuty >= 100 ? "free_sat" : "free";
+      if (freeDuty <= 0) ph = "free_below";
+      if (kick && tRun < KICK_MS) { duty = CAL_DUTY[0]; ph = "free_kick"; }
+      else kick = false;
+      noSpin = (duty > 0 && rpm < 1) ? noSpin + dt : 0;
+      int fault = 0;
+      if (noSpin > 2.0f) { fault = 1; ph = "free_nospin"; }
+      drive(freeEx ? IN : EX, 0);
+      drive(ff, duty);
+      s.breath  = 0;
+      s.tMs     = tRun;
+      s.phase   = ph;
+      s.fan     = freeEx ? "exhale" : "inhale";
+      s.qTarget = sign * flowAtDuty(ff, duty);
+      s.duty    = duty;
+      s.rpm     = rpm;
+      s.rpmExp  = rpmAtDuty(ff, duty);
+      s.qTwin   = sign * twinFlow(ff, rpm);
+      s.valid   = rpm >= ff.rpm[0] ? 1 : 0;
+      s.fault   = fault;
+    }
+
+    // 3b. Flow breath
+    else if (running) {
       const float T = 60.0f / bpm;
       const float qPeak = PI * vt * bpm;
       float t = (now - runStart) / 1000.0f;
@@ -327,7 +402,8 @@ void controlTask(void*) {
         float rpmM = readRpm(meas);
         s.breath  = breath + 1;
         s.tMs     = now - runStart;
-        s.phase   = inhale ? 'i' : 'e';
+        s.phase   = inhale ? "inhale" : "exhale";
+        s.fan     = leadIn ? "inhale" : "exhale";
         s.qTarget = q;
         s.duty    = duty;
         s.trim    = trim;
@@ -366,7 +442,8 @@ void logTask(void*) {
     Sample s;
     if (xQueueReceive(logQ, &s, pdMS_TO_TICKS(200)) == pdTRUE) {
       Serial.printf("%s,%d,%lu,%s,%.2f,%.2f,%.2f,%.0f,%.0f,%.2f,%d,%d\n",
-                    actName(s.act), s.breath, (unsigned long)s.tMs, s.phase == 'i' ? "in" : "ex",
+                    actName(s.act), s.breath, (unsigned long)s.tMs,
+                    !strcmp(s.phase, "inhale") ? "in" : !strcmp(s.phase, "exhale") ? "ex" : s.phase,
                     s.qTarget, s.duty, s.trim, s.rpm, s.rpmExp, s.qTwin, s.valid, s.fault);
     }
     if (bmeOk && millis() - lastEnv >= 1000) {
@@ -425,13 +502,16 @@ bool postTelemetry(Sample* batch, int n) {
     JsonObject o = arr.add<JsonObject>();
     o["device_id"]  = DEVICE_ID;
     o["sampled_at"] = b.ts;
-    o["phase"]      = b.phase == 'i' ? "inhale" : b.phase == 'e' ? "exhale" : "idle";
+    o["phase"]      = b.phase;
     putNum(o, "duty_cmd", b.duty, 1);
     o["rpm_inhale"] = b.rpmIn;
     o["rpm_exhale"] = b.rpmEx;
     putNum(o, "temp_c",       b.temp, 2);
     putNum(o, "rh_pct",       b.rh, 1);
-    if (SEND_PRESSURE) putNum(o, "pressure_hpa", b.pres, 2);
+    if (SEND_NEW_COLUMNS) {
+      putNum(o, "pressure_hpa", b.pres, 2);
+      if (b.fan) o["active_fan"] = b.fan; else o["active_fan"] = nullptr;
+    }
     putNum(o, "q_target",     fabsf(b.qTarget), 2);   // magnitude; sign from phase
     putNum(o, "q_twin",       fabsf(b.qTwin), 2);
     putNum(o, "rpm_expected", b.rpmExp, 0);
@@ -477,7 +557,11 @@ void pollCommands() {
     JsonVariant p = j["params"];
     c.breaths = p["breaths"] | -1;
     int8_t idx = presetIndex(p["preset"] | "");
-    if (idx >= 0) {
+    if (strcmp(p["mode"] | "", "free") == 0) {
+      c.act  = ACT_FREE;
+      c.fanEx = strcmp(p["fan"] | "inhale", "exhale") == 0;
+      c.duty = p["duty"].isNull() ? -1.0f : (p["duty"] | -1.0f);   // missing -> rejected as 'error'
+    } else if (idx >= 0) {
       c.act = idx;
     } else if (!p["vt"].isNull() || !p["bpm"].isNull()) {
       c.act = ACT_CUSTOM;                       // missing half -> 0 -> rejected as 'error'
@@ -509,7 +593,9 @@ void sendAcks() {
     xQueueReceive(ackQ, &a, 0);
     Serial.printf("# [net] cmd #%ld %s (running=%d %s Vt=%.3f L f=%.1f /min peak=%.1f L/min)\n",
                   a.id, a.ok ? "executed" : "REJECTED", a.running, actName(a.act), a.vt, a.bpm, a.qPeak);
-    if (a.ok && a.running) {
+    if (a.ok && a.running && a.act == ACT_FREE)
+      Serial.printf("# free flow: %s fan at %.0f %% duty until stop\n", a.fanEx ? "exhale" : "inhale", a.duty);
+    else if (a.ok && a.running) {
       if (a.qPeak > EX_Q[N_CAL - 1])
         Serial.printf("# WARNING: peak above exhale capacity (%.1f L/min), exhale peaks will clip (fault 3)\n", EX_Q[N_CAL - 1]);
       if (a.qPeak > IN_Q[N_CAL - 1])

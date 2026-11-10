@@ -51,6 +51,7 @@ function migrateSimulator(s: any, keepBreath = false): Simulator {
     mode,
     duty: mode === 'flow' && vt !== null && rate !== null ? flowPeakDuty(vt, rate) : duty,
     ...(mode === 'flow' ? { vt } : {}),
+    ...(mode === 'free' ? { fan: s.fan === 'exhale' ? 'exhale' : 'inhale' } : {}),
     respiratoryRate: mode === 'free' ? null : rate,
     ieRatio: mode === 'flow' ? 1 : typeof s.ieRatio === 'number' ? clamp(s.ieRatio, IE_RANGE.min, IE_RANGE.max) : 1,
   };
@@ -73,13 +74,15 @@ function migrateSession(s: any): SessionMeta {
 
 // Demo samples on disk: one row of numbers per second (null kept for missing values).
 // v3 adds duty; v2 rows (before firmware 0.7) have none.
-type Packed = { v: 3; rows: (number | null)[][] };
+type Packed = { v: 4; rows: (number | null)[][] };
 
 function packSamples(samples: Sample[]): Packed {
   const r2 = (n: number | null) => (n === null ? null : Math.round(n * 100) / 100);
   const r0 = (n: number | null) => (n === null ? null : Math.round(n));
+  // v4 appends the twin fields and ambient pressure (firmware final-1.0-twin).
+  const opt = (n: number | null | undefined) => (n == null ? null : Math.round(n * 100) / 100);
   return {
-    v: 3,
+    v: 4,
     rows: samples.map((s) => [
       s.t,
       r2(s.tidalVolume),
@@ -92,12 +95,16 @@ function packSamples(samples: Sample[]): Packed {
       r0(s.exhaleFan),
       PHASES.indexOf(s.phase),
       r2(s.dutyCmd),
+      opt(s.qTarget),
+      opt(s.qTwin),
+      s.fault ?? null,
+      opt(s.ambientPressure),
     ]),
   };
 }
 
 function unpackSamples(raw: any): Sample[] {
-  if (raw?.v === 3 || raw?.v === 2) {
+  if (raw?.v === 4 || raw?.v === 3 || raw?.v === 2) {
     const v2Phases: Phase[] = ['idle', 'inhale', 'exhale'];
     return raw.rows.map((r: (number | null)[]) => ({
       t: r[0] as number,
@@ -109,8 +116,12 @@ function unpackSamples(raw: any): Sample[] {
       humidity: r[6],
       inhaleFan: (r[7] as number) ?? 0,
       exhaleFan: r[8],
-      phase: (raw.v === 3 ? PHASES : v2Phases)[r[9] as number] ?? 'idle',
-      dutyCmd: raw.v === 3 ? r[10] : null,
+      phase: (raw.v >= 3 ? PHASES : v2Phases)[r[9] as number] ?? 'idle',
+      dutyCmd: raw.v >= 3 ? r[10] : null,
+      qTarget: raw.v >= 4 ? r[11] : null,
+      qTwin: raw.v >= 4 ? r[12] : null,
+      fault: raw.v >= 4 ? r[13] : null,
+      ambientPressure: raw.v >= 4 ? r[14] : null,
     }));
   }
   // Legacy layout [t, tidalVolume, pressure, temperature, co2 %, humidity, inhaleFan, exhaleFan].

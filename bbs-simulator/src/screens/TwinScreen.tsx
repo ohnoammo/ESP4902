@@ -21,7 +21,7 @@ import {
   TWIN_SOURCES,
   VT_RANGE,
 } from '../constants/twin';
-import { BPM_RANGE, StartParams, TelemetryRow, TwinSample, validateStart } from '../device/types';
+import { BPM_RANGE, flowSign, StartParams, TelemetryRow, TwinSample, validateStart } from '../device/types';
 import { HomeStackParams } from '../navigation/types';
 import { useDevice } from '../state/DeviceContext';
 import { useRun } from '../state/RunContext';
@@ -46,6 +46,8 @@ export function TwinScreen({ navigation }: NativeStackScreenProps<HomeStackParam
   const duty = fresh && latest.dutyCmd !== null ? latest.dutyCmd : null;
   const rpm = fresh ? activeRpm(latest) : null;
   const phase = fresh ? latest.phase : null;
+  // Which way air moves: the phase in a flow breath, the running fan in free flow.
+  const direction = fresh ? flowDirection(latest) : null;
   const twin = fresh ? latest.twin : null;
   const twinFirmware = mode === 'demo' || /twin/i.test(deviceStatus?.firmware ?? '') || !!twin;
 
@@ -63,7 +65,7 @@ export function TwinScreen({ navigation }: NativeStackScreenProps<HomeStackParam
     for (const r of rows) {
       if (r.sampledAt < from || !r.twin) continue;
       const t = (r.sampledAt - from) / 1000;
-      const sign = r.phase === 'exhale' ? -1 : 1; // inhale +, exhale −
+      const sign = flowSign(r); // inhale +, exhale −
       if (r.twin.qTarget !== null) push(tgt, t, sign * r.twin.qTarget);
       if (r.twin.qTwin !== null) push(est, t, sign * r.twin.qTwin);
       push(rpmM, t, activeRpm(r));
@@ -102,8 +104,8 @@ export function TwinScreen({ navigation }: NativeStackScreenProps<HomeStackParam
         </Reveal>
 
         <Reveal index={2} style={styles.card}>
-          <RigSchematic rpm={rpm ?? 0} duty={duty ?? 0} phase={phase} qTwin={twin?.qTwin ?? null} />
-          <FlowReadout fresh={fresh} phase={phase} duty={duty} qTwin={twin?.qTwin ?? null} />
+          <RigSchematic rpm={rpm ?? 0} duty={duty ?? 0} phase={direction} qTwin={twin?.qTwin ?? null} />
+          <FlowReadout fresh={fresh} phase={direction} duty={duty} qTwin={twin?.qTwin ?? null} />
         </Reveal>
 
         <Reveal index={3}>
@@ -200,9 +202,13 @@ function push(s: GraphSeries, t: number, v: number) {
   s.v.push(v);
 }
 
-// RPM of the fan driving this half: the exhale fan on exhale when it has a tach, else the
-// inhale fan (one blower driving both halves).
-const activeRpm = (r: TelemetryRow) => (r.phase === 'exhale' && r.rpmExhale !== null ? r.rpmExhale : r.rpmInhale);
+// 'exhale' when air leaves the headform (exhale phase, or free flow on the exhale fan); else
+// the phase as it is ('inhale', 'idle', or the free-flow state for the inhale fan).
+const flowDirection = (r: TelemetryRow) => (r.phase !== 'idle' && flowSign(r) < 0 ? 'exhale' : r.phase);
+
+// RPM of the fan doing this half: the exhale fan when air leaves the headform (when it has a
+// tach), else the inhale fan.
+const activeRpm = (r: TelemetryRow) => (flowSign(r) < 0 && r.rpmExhale !== null ? r.rpmExhale : r.rpmInhale);
 
 // Phase, fault and calibration validity at a glance. Fault is the one that needs action.
 function TwinStatus({

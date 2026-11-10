@@ -118,6 +118,7 @@ export function ReadyScreen({ navigation, route }: NativeStackScreenProps<HomeSt
           {sim.mode === 'free' ? (
             <>
               <ParamRow first label="Mode" value="Free flow" />
+              <ParamRow label="Fan" value={sim.fan === 'exhale' ? 'Exhale (blows out)' : 'Inhale (sucks in)'} />
               <ParamRow label="Duty" value={String(sim.duty)} unit="%" />
             </>
           ) : sim.mode === 'flow' ? (

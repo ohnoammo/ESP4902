@@ -1,11 +1,12 @@
 import {
   CAL_DUTY,
   dutyForFlow,
+  flowAtDuty,
   flowForRpm,
   minCalibratedRpm,
   Q_MAX_EX,
   Q_MAX_IN,
-  rpmForDuty,
+  rpmAtDuty,
   rpmForFlow,
   TRIM_LIMIT,
   TWIN_PRESETS,
@@ -34,9 +35,9 @@ import {
 //     and reports fault 3, so every preset except demo_15 clips its exhale peaks.
 //     The run ends after `breaths` (default 10), like the firmware.
 //   - BME280: temperature, humidity and ambient pressure drift slowly around room values
-//   - breath / free: the older duty modes (firmware blower-0.7), kept for older simulators:
-//     breath is a half-sine from the 20 % floor; free is a fixed duty with kick-start below
-//     25 % and no flow below 19 %; the blower follows duty ~0.6 s late and can't brake
+//   - free (final-1.0-twin): the chosen fan at a fixed duty until stop, kick at 25 % from rest
+//   - breath: the old duty half-sine (firmware blower-0.7), kept for recorded runs; the blower
+//     follows duty ~0.6 s late and can't brake
 
 const SAMPLE_MS = 100;
 const KEEP_MS = 60 * 60 * 1000; // an hour of history in memory, enough for any demo run
@@ -111,15 +112,9 @@ export function createDemoBackend(): Backend {
     return b;
   };
 
-  // What the firmware commands at time ts in the duty modes: [phase, duty written to the PWM].
+  // The old duty breath (blower-0.7) at time ts: [phase, duty written to the PWM].
   const dutyCommand = (ts: number): [Phase, number] => {
-    if (!settings || settings.mode === 'flow' || ts < cycleStart) return ['idle', 0];
-    if (settings.mode === 'free') {
-      const d = settings.duty;
-      if (d < NO_FLOW_BELOW) return ['free_below', 0];
-      if (ts < kickUntil) return ['free_kick', KICK_DUTY];
-      return [d >= 100 ? 'free_sat' : 'free', d];
-    }
+    if (!settings || settings.mode !== 'breath' || ts < cycleStart) return ['idle', 0];
     const period = 60000 / settings.bpm;
     const inhaleMs = period / (1 + settings.ie_ratio);
     const t = (ts - cycleStart) % period;
@@ -153,7 +148,7 @@ export function createDemoBackend(): Backend {
   // One fan towards the speed its duty gives (slower by FAN_GAIN).
   const stepFan = (dir: TwinDirection, duty: number, dt: number) => {
     const f = fans[dir];
-    const target = rpmForDuty(duty, dir) * FAN_GAIN;
+    const target = rpmAtDuty(duty, dir) * FAN_GAIN;
     // Spins up and down with the same lag: under load in the sealed chamber the idle fan
     // (EN low) reads about 0 within a half-breath, as on the rig.
     f.rpm += (target - f.rpm) * (1 - Math.exp(-dt / FAN_TAU_S));
@@ -227,6 +222,7 @@ export function createDemoBackend(): Backend {
       dutyCmd: Math.round(duty * 10) / 10,
       rpmInhale: measured('inhale'),
       rpmExhale: measured('exhale'),
+      activeFan: act,
       twin,
     };
   };
@@ -237,12 +233,48 @@ export function createDemoBackend(): Backend {
     stepFan('exhale', 0, dt);
     noSpin = 0;
     rpmExpPrev = 0;
-    return { ...base(ts), phase: 'idle', dutyCmd: 0, rpmInhale: measured('inhale'), rpmExhale: measured('exhale'), twin: null };
+    return { ...base(ts), phase: 'idle', dutyCmd: 0, rpmInhale: measured('inhale'), rpmExhale: measured('exhale'), activeFan: null, twin: null };
+  };
+
+  // Free flow (final-1.0-twin): the chosen fan at a fixed duty, the other off, until stop.
+  // From rest below 25 % it kicks at 25 % for 1 s; no tach for 2 s while driven = free_nospin.
+  const freeRow = (ts: number, duty: number, fan: TwinDirection): TelemetryRow => {
+    const dt = SAMPLE_MS / 1000;
+    const other: TwinDirection = fan === 'inhale' ? 'exhale' : 'inhale';
+    const kick = ts < kickUntil;
+    const d = kick ? KICK_DUTY : duty;
+    let phase: Phase = duty <= 0 ? 'free_below' : kick ? 'free_kick' : duty >= 100 ? 'free_sat' : 'free';
+    stepFan(fan, d, dt);
+    stepFan(other, 0, dt);
+    const rpmM = measured(fan);
+    noSpin = d > 0 && rpmM < 1 ? noSpin + dt : 0;
+    const fault = noSpin > NOSPIN_S ? 1 : 0;
+    if (fault) phase = 'free_nospin';
+    return {
+      ...base(ts),
+      phase,
+      dutyCmd: d,
+      rpmInhale: measured('inhale'),
+      rpmExhale: measured('exhale'),
+      activeFan: fan,
+      twin: {
+        qTarget: r2(flowAtDuty(d, fan)),
+        qTwin: r2(flowForRpm(rpmM, fan)),
+        dpTwin: null,
+        dpMeas: null,
+        residualPct: null,
+        rpmExpected: Math.round(rpmAtDuty(d, fan)),
+        trim: null,
+        valid: rpmM >= minCalibratedRpm(fan),
+        fault: fault as TwinSample['fault'],
+      },
+    };
   };
 
   const makeRow = (ts: number): TelemetryRow => {
     if (settings?.mode === 'flow' && flowRun && ts >= cycleStart) return flowRow(ts);
-    if (!settings || settings.mode === 'flow') return idleRow(ts);
+    if (settings?.mode === 'free' && ts >= cycleStart) return freeRow(ts, settings.duty, settings.fan ?? 'inhale');
+    if (!settings || settings.mode !== 'breath') return idleRow(ts);
     const [phase, duty] = dutyCommand(ts);
     dutyHistory.push({ ts, duty });
     while (dutyHistory.length && dutyHistory[0].ts < ts - LAG_MS - SAMPLE_MS) dutyHistory.shift();
@@ -257,6 +289,7 @@ export function createDemoBackend(): Backend {
       dutyCmd: Math.round(duty * 10) / 10,
       rpmInhale: rpm < 30 ? 0 : Math.max(0, Math.round(rpm + noise(rpm * 0.01))),
       rpmExhale: null,
+      activeFan: null,
       twin: null,
     };
   };
@@ -333,7 +366,9 @@ export function createDemoBackend(): Backend {
             rpmExpPrev = 0;
           }
           // From standstill at a low free duty, the firmware kick-starts the fan first.
-          kickUntil = start.mode === 'free' && start.duty >= NO_FLOW_BELOW && start.duty < KICK_DUTY && rpm < 500 ? cycleStart + KICK_MS : 0;
+          if (start.mode === 'free') noSpin = 0;
+          const free = start.mode === 'free' ? fans[start.fan ?? 'inhale'] : null;
+          kickUntil = start.mode === 'free' && start.duty > 0 && start.duty < KICK_DUTY && free!.rpm < 500 ? cycleStart + KICK_MS : 0;
         } else {
           settings = null;
           flowRun = null;

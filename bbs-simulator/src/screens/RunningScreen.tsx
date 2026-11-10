@@ -10,6 +10,7 @@ import { PHASE_BANNERS } from '../constants/dutyBands';
 import { HomeStackParams } from '../navigation/types';
 import { useRun } from '../state/RunContext';
 import { useDevice } from '../state/DeviceContext';
+import { drivenRpm } from '../device/types';
 import { fs, colors, font, heroSize, themedStyles, type } from '../theme';
 import { formatClock, formatNumber, formatSettings } from '../utils/format';
 import * as svgs from '../assets/svgs';
@@ -40,7 +41,7 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
     const withDuty = recent.filter((r) => r.dutyCmd !== null);
     return [
       { t: withDuty.map((r) => (r.sampledAt - from) / 1000), v: withDuty.map((r) => r.dutyCmd as number), color: colors.seriesA },
-      { t: recent.map((r) => (r.sampledAt - from) / 1000), v: recent.map((r) => (r.rpmInhale / MAX_RPM) * 100), color: colors.strong },
+      { t: recent.map((r) => (r.sampledAt - from) / 1000), v: recent.map((r) => (drivenRpm(r) / MAX_RPM) * 100), color: colors.strong },
     ];
   }, [version, buffer]);
 
@@ -129,7 +130,7 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
         </Reveal>
 
         <Reveal index={2} style={styles.readings}>
-          <Reading value={latest && !stale ? formatNumber(latest.rpmInhale, 0) : '–'} unit="rpm" />
+          <Reading value={latest && !stale ? formatNumber(drivenRpm(latest), 0) : '–'} unit="rpm" />
           <Reading value={latest && !stale && latest.dutyCmd !== null ? formatNumber(latest.dutyCmd, 0) : '–'} unit="% duty" />
           <Reading value={latest && !stale ? latest.phase : '–'} unit="phase" small />
         </Reveal>

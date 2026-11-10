@@ -302,10 +302,10 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
         setStartError('Set the tidal volume first.');
         return;
       }
-      // Firmware final-1.0 only runs flow breaths: it would treat a duty start as its default
-      // preset, so don't send one.
-      if (sim.mode !== 'flow' && /^final-/i.test(deviceStatus?.firmware ?? '')) {
-        setStartError('This firmware only runs flow breaths. Use a preset or a flow-breath simulator.');
+      // Firmware final-1.0 runs flow breaths and free flow, not the old duty breath: it would
+      // treat one as its default preset, so don't send it.
+      if (sim.mode === 'breath' && /^final-/i.test(deviceStatus?.firmware ?? '')) {
+        setStartError('This firmware doesn’t run duty breaths. Use a flow breath or free flow.');
         return;
       }
       // Missing params keep the firmware's last-used values, so send every one that applies.
@@ -313,7 +313,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
       // fractional (20.5 bpm), which the commands table doesn't accept.
       const params: StartParams =
         sim.mode === 'free'
-          ? { mode: 'free', duty: Math.round(sim.duty) }
+          ? { mode: 'free', duty: Math.round(sim.duty), fan: sim.fan ?? 'inhale' }
           : sim.mode === 'flow'
             ? sim.activity
               ? { mode: 'flow', preset: sim.activity }

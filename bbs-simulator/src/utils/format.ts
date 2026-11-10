@@ -55,8 +55,9 @@ export function formatSettings(sim: {
   vt?: number | null;
   respiratoryRate: number | null;
   ieRatio: number;
+  fan?: 'inhale' | 'exhale';
 }): string {
-  if (sim.mode === 'free') return `Free flow, ${sim.duty} %`;
+  if (sim.mode === 'free') return `Free flow, ${sim.duty} %${sim.fan === 'exhale' ? ' · exhale fan' : ''}`;
   if (sim.mode === 'flow') {
     if (sim.vt == null || sim.respiratoryRate === null) return 'Flow breath, not set';
     return `Vt ${sim.vt} L · ${sim.respiratoryRate} bpm · peak ${Math.round(Math.PI * sim.vt * sim.respiratoryRate)} L/min`;

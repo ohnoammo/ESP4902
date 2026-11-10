@@ -1,4 +1,4 @@
-import { TelemetryRow } from '../device/types';
+import { flowSign, TelemetryRow } from '../device/types';
 import { Sample } from '../types';
 
 // CO2 sensor (MH-Z16) saturates at 50 000 ppm, so readings near it are unreliable.
@@ -38,7 +38,6 @@ export function perSecond(rows: TelemetryRow[], startMs: number): Sample[] {
       const b = buckets.get(sec)!;
       const last = b.reduce((a, r) => (r.sampledAt >= a.sampledAt ? r : a));
       const co2 = b.map((r) => r.co2Ppm).filter((v): v is number => v !== null);
-      const sign = (r: TelemetryRow) => (r.phase === 'exhale' ? -1 : 1);
       const faults = b.map((r) => r.twin?.fault ?? null).filter((v): v is NonNullable<typeof v> => v !== null);
       return {
         t: sec,
@@ -53,8 +52,8 @@ export function perSecond(rows: TelemetryRow[], startMs: number): Sample[] {
         inhaleFan: meanOf(b.map((r) => r.rpmInhale)) ?? 0,
         exhaleFan: meanOf(b.map((r) => r.rpmExhale)),
         phase: last.phase,
-        qTarget: meanOf(b.map((r) => (r.twin?.qTarget == null ? null : sign(r) * r.twin.qTarget))),
-        qTwin: meanOf(b.map((r) => (r.twin?.qTwin == null ? null : sign(r) * r.twin.qTwin))),
+        qTarget: meanOf(b.map((r) => (r.twin?.qTarget == null ? null : flowSign(r) * r.twin.qTarget))),
+        qTwin: meanOf(b.map((r) => (r.twin?.qTwin == null ? null : flowSign(r) * r.twin.qTwin))),
         fault: faults.length ? Math.max(...faults) : null,
       };
     });

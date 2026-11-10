@@ -37,6 +37,12 @@ export const rpmForFlow = (q: number, dir: TwinDirection) =>
 export const flowForRpm = (rpm: number, dir: TwinDirection) =>
   rpm <= 0 ? 0 : rpm < rpmOf(dir)[0] ? (qOf(dir)[0] * rpm) / rpmOf(dir)[0] : interp(rpm, rpmOf(dir), qOf(dir));
 export const rpmForDuty = (duty: number, dir: TwinDirection) => (duty <= 0 ? 0 : interp(duty, CAL_DUTY, rpmOf(dir)));
+// Free flow: what the table expects from a fan at a duty, scaled towards 0 below 25 % (firmware
+// flowAtDuty / rpmAtDuty).
+export const flowAtDuty = (d: number, dir: TwinDirection) =>
+  d <= 0 ? 0 : d < CAL_DUTY[0] ? (qOf(dir)[0] * d) / CAL_DUTY[0] : interp(d, CAL_DUTY, qOf(dir));
+export const rpmAtDuty = (d: number, dir: TwinDirection) =>
+  d <= 0 ? 0 : d < CAL_DUTY[0] ? (rpmOf(dir)[0] * d) / CAL_DUTY[0] : interp(d, CAL_DUTY, rpmOf(dir));
 // The twin's estimate counts as calibrated when the fan turns at least as fast as the table's
 // first point (the firmware's `valid`).
 export const minCalibratedRpm = (dir: TwinDirection) => rpmOf(dir)[0];

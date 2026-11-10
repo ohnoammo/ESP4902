@@ -18,7 +18,10 @@ export interface Simulator {
   respiratoryRate: number | null; // sent as `bpm`
   ieRatio: number; // E/I, exhale part of 1:X; flow breaths are 1:1; ignored in free mode
   activity?: ActivityKey; // set only on the built-in activity simulators (src/constants/presets.ts)
+  fan?: FanSide; // free only: which fan runs (default inhale)
 }
+
+export type FanSide = 'inhale' | 'exhale';
 
 // The firmware's preset ids (src/constants/twin.ts, TWIN_PRESETS).
 export type ActivityKey = 'demo_15' | 'walk_slow' | 'walk_fast' | 'light_f' | 'light_m';

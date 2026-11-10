@@ -23,10 +23,13 @@
   signed), highest fault per second, ambient pressure.
 - **Demo mode**: simulates the final firmware (two fans, 0.2 s lead, KP feedback, trim,
   faults, 10-breath runs, BME280). Clipped presets show fault 3 at their exhale peaks.
-- Starting a free-flow or duty-breath simulator is blocked on `final-…` firmware.
+- **Free flow** on either fan: the editor has an Inhale fan / Exhale fan choice; the firmware
+  runs that fan at a fixed duty until Stop (`{"mode":"free","duty":50,"fan":"exhale"}`).
+  Telemetry `active_fan` says which fan runs, so exhale free flow plots below 0.
+- Starting an old duty-breath simulator is blocked on `final-…` firmware.
 
 ## Supabase
 - `supabase/migrations/20261111_final_pressure.sql`: adds `telemetry.pressure_hpa` and
-  updates column comments. **Not applied.** Apply before flashing the final firmware.
+  `telemetry.active_fan`, and updates column comments. **Not applied.** Apply before flashing the final firmware.
 - `20261106_flow_runs.sql` is still not applied, so flow runs are not saved as `runs` rows
   (unchanged; the app says so).
