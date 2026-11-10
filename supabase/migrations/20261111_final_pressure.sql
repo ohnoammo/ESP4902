@@ -1,4 +1,4 @@
--- Firmware final-1.0-twin (firmware/esp4902_final). NOT APPLIED YET: needs the team's OK.
+-- Firmware final-1.0-twin (firmware/esp4902_final). Applied to ESP4902 on 2026-11-10 as 'final_pressure'.
 --
 -- Apply this BEFORE flashing final-1.0-twin with SEND_NEW_COLUMNS = true: PostgREST rejects a
 -- whole telemetry batch that names a column the table doesn't have, so until this runs no

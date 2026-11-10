@@ -48,7 +48,7 @@
     from phase ('inhale' +, 'exhale' -), or in free flow from active_fan.
     active_fan = the fan being driven ('inhale' / 'exhale', null when idle).
     pressure_hpa and active_fan need the migration
-    supabase/migrations/20261111_final_pressure.sql (NOT applied yet). Until it is applied,
+    supabase/migrations/20261111_final_pressure.sql (applied to ESP4902 2026-11-10). Without it,
     PostgREST rejects every telemetry batch that carries them: set SEND_NEW_COLUMNS to false to
     run before the migration (the app then shows exhale free flow as inhale).
 

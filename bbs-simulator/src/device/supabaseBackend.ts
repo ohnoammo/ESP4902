@@ -8,7 +8,7 @@ import { Backend, CommandRecord, DEVICE_ID, DeviceStatus, PHASES, TelemetryRow, 
 
 // Every column, so the app works whether or not optional columns exist yet: the twin columns
 // (migration twin_telemetry, applied 2026-11-04) and pressure_hpa (migration
-// 20261111_final_pressure, NOT applied yet). A missing column is simply absent from the row
+// 20261111_final_pressure, applied 2026-11-10). A missing column is simply absent from the row
 // and read as null, instead of failing the whole query. Same for active_fan (same migration).
 const TELEMETRY_COLUMNS = '*';
 const PAGE = 1000; // PostgREST's default row cap per request
