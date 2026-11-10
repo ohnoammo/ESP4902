@@ -9,9 +9,9 @@ import { DEVICE_ID } from './types';
 // kept on the phone (DataContext), not here.
 
 // Flow runs need the migration supabase/migrations/20261106_flow_runs.sql (runs.mode allows
-// 'flow', and a vt_l column). Until it's applied, flow runs aren't saved (a clear error) and
-// vt_l isn't selected (selecting a missing column would fail every query).
-export const FLOW_RUNS_IN_DB = false;
+// 'flow', and a vt_l column), applied to ESP4902 on 2026-11-10. On a database without it, set
+// this false: flow runs then aren't saved (a clear error) and vt_l isn't selected.
+export const FLOW_RUNS_IN_DB = true;
 
 const COLUMNS =
   'id, name, device_id, mode, started_at, ended_at, ended_by, bpm, duty, ie_ratio, firmware, headform, mask, notes, archived' +

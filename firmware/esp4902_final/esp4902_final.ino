@@ -436,6 +436,46 @@ void controlTask(void*) {
 // =================================================================
 //  CORE 0. LOG TASK  (Serial CSV + BME280)
 // =================================================================
+// BME280, once a second. A sensor that browns out (e.g. when a fan starts) or loses its I2C
+// link drops into sleep mode and keeps returning its last reading, or returns nonsense. So a
+// reading outside physical limits, or a pressure identical for ENV_STUCK_READS reads in a row
+// (a live sensor always varies in the last digits), is sent as null and the sensor is
+// re-initialised. Not found at boot: retried every ENV_RETRY_MS.
+const int      ENV_STUCK_READS = 5;
+const uint32_t ENV_RETRY_MS    = 10000;
+
+bool beginBme() { return bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire); }
+
+void readEnv() {
+  static int stuck = 0;
+  static float lastP = NAN;
+  static uint32_t lastTry = 0;
+  if (!bmeOk) {
+    envTemp = envRh = envPres = NAN;
+    if (millis() - lastTry < ENV_RETRY_MS) return;
+    lastTry = millis();
+    bmeOk = beginBme();
+    if (bmeOk) Serial.println("# BME280 found");
+    stuck = 0; lastP = NAN;
+    return;
+  }
+  float t = bme.readTemperature();
+  float h = bme.readHumidity();
+  float p = bme.readPressure() / 100.0f;      // hPa
+  bool sane = t > -20 && t < 80 && h >= 0 && h <= 100 && p > 800 && p < 1100;
+  stuck = (p == lastP) ? stuck + 1 : 0;
+  lastP = p;
+  if (sane && stuck < ENV_STUCK_READS) {
+    envTemp = t; envRh = h; envPres = p;
+    return;
+  }
+  envTemp = envRh = envPres = NAN;              // sent as null, never a stale value
+  Serial.printf("# BME280 %s (T=%.2f RH=%.1f P=%.2f), re-initialising\n", sane ? "stuck" : "out of range", t, h, p);
+  bmeOk = beginBme();
+  stuck = 0; lastP = NAN;
+  if (!bmeOk) Serial.println("# BME280 NOT found, retrying every 10 s (check SDA 8, SCL 9, 3.3 V)");
+}
+
 void logTask(void*) {
   uint32_t lastEnv = 0;
   for (;;) {
@@ -446,11 +486,9 @@ void logTask(void*) {
                     !strcmp(s.phase, "inhale") ? "in" : !strcmp(s.phase, "exhale") ? "ex" : s.phase,
                     s.qTarget, s.duty, s.trim, s.rpm, s.rpmExp, s.qTwin, s.valid, s.fault);
     }
-    if (bmeOk && millis() - lastEnv >= 1000) {
+    if (millis() - lastEnv >= 1000) {
       lastEnv = millis();
-      envTemp = bme.readTemperature();
-      envRh   = bme.readHumidity();
-      envPres = bme.readPressure() / 100.0f;   // hPa
+      readEnv();
     }
   }
 }
@@ -676,7 +714,7 @@ void setup() {
   Serial.printf("\n# %s booting\n", FW_VERSION);
 
   Wire.begin(I2C_SDA, I2C_SCL);
-  bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire);
+  bmeOk = beginBme();
   Serial.printf("# BME280 %s\n", bmeOk ? "found" : "NOT found (temp/rh/pressure sent as null)");
 
   // v4 FIX 12. Nothing runs until network + time are up (fans stay stopped meanwhile)

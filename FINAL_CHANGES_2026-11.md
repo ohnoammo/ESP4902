@@ -31,5 +31,5 @@
 ## Supabase
 - `supabase/migrations/20261111_final_pressure.sql`: adds `telemetry.pressure_hpa` and
   `telemetry.active_fan`, and updates column comments. **Applied to ESP4902 on 2026-11-10.**
-- `20261106_flow_runs.sql` is still not applied, so flow runs are not saved as `runs` rows
-  (unchanged; the app says so).
+- `20261106_flow_runs.sql`: applied to ESP4902 on 2026-11-10 and `FLOW_RUNS_IN_DB = true`, so
+  flow runs are saved as `runs` rows.

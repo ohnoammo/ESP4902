@@ -1,6 +1,6 @@
 -- Flow-breath runs (simulators set by tidal volume + rate, run by the digital twin).
--- NOT APPLIED YET: needs the team's OK. After applying, set FLOW_RUNS_IN_DB = true in
--- bbs-simulator/src/device/runsApi.ts.
+-- Applied to ESP4902 on 2026-11-10 as 'flow_runs' (FLOW_RUNS_IN_DB = true in
+-- bbs-simulator/src/device/runsApi.ts).
 --
 -- 1. runs.mode also allows 'flow'. This replaces the existing check; every existing row
 --    ('breath' / 'free') still passes it.
