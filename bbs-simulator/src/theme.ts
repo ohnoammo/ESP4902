@@ -1,4 +1,4 @@
-import { StyleSheet, TextStyle } from 'react-native';
+import { ImageStyle, StyleSheet, TextStyle, ViewStyle } from 'react-native';
 
 export type Scheme = 'dark' | 'light';
 
@@ -180,7 +180,10 @@ export function applyTextScale(scale: number) {
 
 // Drop-in for StyleSheet.create whose values may read `colors`/`type`: the sheet is
 // rebuilt lazily the first time it is read after a theme change.
-export function themedStyles<T extends StyleSheet.NamedStyles<T>>(factory: () => T & StyleSheet.NamedStyles<any>): T {
+// StyleSheet.NamedStyles is no longer exported (React Native 0.88).
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
+
+export function themedStyles<T extends NamedStyles<T>>(factory: () => T & NamedStyles<any>): T {
   let sheet: T | null = null;
   let builtFor = -1;
   return new Proxy({} as T, {

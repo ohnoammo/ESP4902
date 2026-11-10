@@ -7,6 +7,9 @@ import { Icon } from './basics';
 import * as svgs from '../assets/svgs';
 import { themedSvgs } from '../assets/themedSvgs';
 
+// The instance a View ref receives (React Native 0.88 types View as a function component).
+type ViewRef = React.ComponentRef<typeof View>;
+
 const ACTION_W = 98;
 const ACTIONS_W = ACTION_W * 2;
 const LONG_PRESS_MS = 380;
@@ -48,7 +51,7 @@ export function RunRow({
   onDragStart: (x: number, y: number) => void;
   onDragMove: (x: number, y: number) => void;
   onDragEnd: () => void;
-  rowRef: (v: View | null) => void;
+  rowRef: (v: ViewRef | null) => void;
 }) {
   const reveal = useRef(new Animated.Value(0)).current; // 0 closed, -ACTIONS_W open
   const [pressed, setPressed] = useState(false);
@@ -241,7 +244,7 @@ interface Rect {
   h: number;
 }
 
-function measure(v: View | null | undefined): Promise<Rect | null> {
+function measure(v: ViewRef | null | undefined): Promise<Rect | null> {
   return new Promise((resolve) => {
     if (!v) return resolve(null);
     v.measureInWindow((x, y, w, h) => resolve({ x, y, w, h }));
@@ -268,9 +271,9 @@ export function useRunDrag({
   onReorder: (orderedIds: string[]) => void;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
-  const contentRef = useRef<View>(null);
-  const rowRefs = useRef(new Map<string, View | null>());
-  const targetRefs = useRef(new Map<string, View | null>());
+  const contentRef = useRef<ViewRef>(null);
+  const rowRefs = useRef(new Map<string, ViewRef | null>());
+  const targetRefs = useRef(new Map<string, ViewRef | null>());
   const geo = useRef<{
     content: Rect;
     grabOffset: number;
@@ -280,8 +283,8 @@ export function useRunDrag({
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
 
-  const registerRow = useCallback((id: string) => (v: View | null) => void rowRefs.current.set(id, v), []);
-  const registerTarget = useCallback((key: string) => (v: View | null) => void targetRefs.current.set(key, v), []);
+  const registerRow = useCallback((id: string) => (v: ViewRef | null) => void rowRefs.current.set(id, v), []);
+  const registerTarget = useCallback((key: string) => (v: ViewRef | null) => void targetRefs.current.set(key, v), []);
 
   const compute = (runId: string, x: number, y: number): DragState | null => {
     const g = geo.current;
@@ -398,7 +401,7 @@ export function FolderCard({
   state: 'normal' | 'hover' | 'dim';
   onPress: () => void;
   onLongPress: () => void;
-  viewRef: (v: View | null) => void;
+  viewRef: (v: ViewRef | null) => void;
 }) {
   return (
     <Pressable

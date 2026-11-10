@@ -41,7 +41,7 @@ export function AssistantScreen({ navigation, route }: NativeStackScreenProps<Se
   useEffect(() => {
     history.set(historyKey, messages);
   }, [historyKey, messages]);
-  const scroll = useRef<ScrollView>(null);
+  const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   useEffect(() => {
     let alive = true;
