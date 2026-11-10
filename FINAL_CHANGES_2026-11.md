@@ -4,7 +4,7 @@
 - v4's Supabase/WiFi/FreeRTOS sketch with the two-fan installed-calibration control loop from
   `twin_installed_breathing.ino` (built in an earlier session).
 - Fixed in this commit: comments said the default preset was `demo_low`; it is `demo_15`.
-  Added `SEND_PRESSURE` so the firmware can run before the pressure migration is applied.
+  Added `SEND_NEW_COLUMNS` so the firmware can run without the new columns.
 
 ## App (`bbs-simulator/`)
 - **Twin model** (`src/constants/twin.ts`): the installed calibration replaces the old
