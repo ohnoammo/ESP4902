@@ -55,8 +55,6 @@ export function SensorsScreen({ navigation }: NativeStackScreenProps<HomeStackPa
         second.pres === null
           ? { label: 'Ambient pressure', value: 'Not connected', muted: true }
           : { label: 'Ambient pressure', value: `${formatNumber(second.pres, 1)} hPa`, sub: 'BME280' },
-        { label: 'Tidal volume', value: 'Not measured yet', muted: true },
-        { label: 'Peak pressure', value: 'Not measured yet', muted: true },
       ]
     : [];
 

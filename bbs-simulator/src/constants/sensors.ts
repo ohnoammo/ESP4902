@@ -87,7 +87,8 @@ export const presentSeries = (def: SensorDef, samples: Sample[]) =>
 const fixed = (v: number | null | undefined, d: number) => (v == null ? '' : v.toFixed(d));
 
 // CSV export: one row per second (1 s averages of the telemetry). CO2 stays in ppm; missing
-// values (not measured, sensor not connected) are left blank.
+// values (sensor not connected) are left blank. Tidal volume and airway pressure aren't measured
+// (no flow or pressure sensor in the airway), so they have no columns.
 export const CSV_COLUMNS: { label: string; value: (s: Sample) => string }[] = [
   { label: 'Time (s)', value: (s) => String(s.t) },
   { label: 'Phase', value: (s) => s.phase },
@@ -97,8 +98,6 @@ export const CSV_COLUMNS: { label: string; value: (s: Sample) => string }[] = [
   { label: 'Target flow, 1 s mean (L/min, + inhale)', value: (s) => fixed(s.qTarget, 2) },
   { label: 'Estimated airflow, installed calibration, 1 s mean (L/min, + inhale)', value: (s) => fixed(s.qTwin, 2) },
   { label: 'Fault (highest in second)', value: (s) => (s.fault == null ? '' : String(s.fault)) },
-  { label: 'Tidal volume (mL, not measured yet)', value: (s) => fixed(s.tidalVolume, 0) },
-  { label: 'Peak pressure (cmH2O, not measured yet)', value: (s) => fixed(s.pressure, 2) },
   { label: 'Temperature (C)', value: (s) => fixed(s.temperature, 2) },
   { label: 'CO2 (ppm)', value: (s) => fixed(s.co2Ppm, 0) },
   { label: 'CO2 peak (ppm)', value: (s) => fixed(s.co2PeakPpm, 0) },

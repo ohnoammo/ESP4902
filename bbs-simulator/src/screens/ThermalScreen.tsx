@@ -14,7 +14,7 @@ import { fs, colors, font, themedStyles, type } from '../theme';
 import { formatNumber } from '../utils/format';
 import { IMAGE_ROWS, WIDTH } from '../thermal/protocol';
 import { PALETTES } from '../thermal/palettes';
-import { Palette, frameToBmp, bmpToDataUri, paletteColor } from '../thermal/render';
+import { Palette, Rotation, View as FrameView, frameToBmp, bmpToDataUri, makeView, paletteColor } from '../thermal/render';
 import { Calibration, RECOMMENDED, THRESHOLD_MAX, THRESHOLD_MIN, countsPerC, toCelsius } from '../thermal/detect';
 import { webUsbAvailable } from '../thermal/source';
 import { saveSnapshot } from '../thermal/snapshot';
@@ -73,16 +73,19 @@ export function ThermalScreen({ navigation }: NativeStackScreenProps<HomeStackPa
     }
     range.current = r;
     const iso = settings.isoOn && cal ? { counts: cal.a.counts + (settings.isoC - cal.a.c) * countsPerC(cal), rgb: ISO_RGB } : null;
-    bmp = frameToBmp(snapshot.frame.y16, r.min, r.max, settings.palette, iso);
+    bmp = frameToBmp(snapshot.frame.y16, r.min, r.max, settings.palette, iso, settings.rotation, settings.smooth ? SMOOTH_SCALE : 1);
   }
+  // The picture as shown (rotated); markers, the warm-patch box and taps use it.
+  const view = makeView(settings.rotation);
   const h = snapshot?.frame.header;
   const temp = (counts: number) => (cal ? fmtTemp(toCelsius(cal, counts), u) : '–');
   const spotIndex = spot ? spot.y * WIDTH + spot.x : null;
 
   const onTapImage = (e: any) => {
     if (!frameSize.w) return;
-    const x = Math.min(WIDTH - 1, Math.max(0, Math.floor((e.nativeEvent.locationX / frameSize.w) * WIDTH)));
-    const y = Math.min(IMAGE_ROWS - 1, Math.max(0, Math.floor((e.nativeEvent.locationY / frameSize.h) * IMAGE_ROWS)));
+    const vx = Math.min(view.w - 1, Math.max(0, Math.floor((e.nativeEvent.locationX / frameSize.w) * view.w)));
+    const vy = Math.min(view.h - 1, Math.max(0, Math.floor((e.nativeEvent.locationY / frameSize.h) * view.h)));
+    const [x, y] = view.fromView(vx, vy); // the spot is kept in camera pixels, so rotating keeps it
     setSpot({ x, y });
   };
 
@@ -117,22 +120,22 @@ export function ThermalScreen({ navigation }: NativeStackScreenProps<HomeStackPa
             <Pressable
               onPress={onTapImage}
               onLayout={(e) => setFrameSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
-              style={styles.frame}
+              style={[styles.frame, { aspectRatio: view.w / view.h }]}
               accessibilityRole="image"
               accessibilityLabel={`Thermal image, brighter is warmer.${snapshot.hotspot ? ' A warm patch is highlighted.' : ''} Tap to measure a spot.`}
             >
               <Image source={{ uri: bmpToDataUri(bmp) }} style={styles.image} resizeMode="stretch" />
-              {snapshot.hotspot && <HotspotBox h={snapshot.hotspot} />}
-              <Marker index={snapshot.stats.maxAt} kind="hot" />
-              <Marker index={snapshot.stats.minAt} kind="cold" />
+              {snapshot.hotspot && <HotspotBox h={snapshot.hotspot} view={view} />}
+              <Marker index={snapshot.stats.maxAt} kind="hot" view={view} />
+              <Marker index={snapshot.stats.minAt} kind="cold" view={view} />
               {spotIndex !== null ? (
-                <Marker index={spotIndex} kind="spot" label={cal ? temp(snapshot.frame.y16[spotIndex]) : 'spot'} />
+                <Marker index={spotIndex} kind="spot" view={view} label={cal ? temp(snapshot.frame.y16[spotIndex]) : 'spot'} />
               ) : (
                 <View style={styles.crosshair} pointerEvents="none" />
               )}
             </Pressable>
           ) : (
-            <View style={[styles.frame, styles.empty]} accessibilityLiveRegion="polite">
+            <View style={[styles.frame, { aspectRatio: view.w / view.h }, styles.empty]} accessibilityLiveRegion="polite">
               <Text style={styles.noInput} accessibilityRole="header">
                 No input
               </Text>
@@ -158,6 +161,24 @@ export function ThermalScreen({ navigation }: NativeStackScreenProps<HomeStackPa
             <View style={styles.imageActions}>
               <PrimaryButton label="Save picture" icon="save" variant="outline" onPress={() => bmp && saveSnapshot(bmp)} style={styles.half} />
               <PrimaryButton label={locked ? 'Unlock colours' : 'Lock colours'} icon={locked ? 'unlock' : 'lock'} variant="outline" onPress={() => setLocked(!locked)} style={styles.half} />
+            </View>
+          )}
+          {hasInput && (
+            <View style={styles.imageActions}>
+              <PrimaryButton
+                label={`Rotate · ${settings.rotation}°`}
+                icon="refresh"
+                variant="outline"
+                onPress={() => t.updateSettings({ rotation: (((settings.rotation + 90) % 360) as Rotation) })}
+                style={styles.half}
+              />
+              <PrimaryButton
+                label={settings.smooth ? 'Smooth: on' : 'Smooth: off'}
+                icon={settings.smooth ? 'check' : undefined}
+                variant="outline"
+                onPress={() => t.updateSettings({ smooth: !settings.smooth })}
+                style={styles.half}
+              />
             </View>
           )}
           {spot && hasInput && <LinkText label="Clear measuring spot" size={16} onPress={() => setSpot(null)} />}
@@ -418,17 +439,21 @@ function PaletteChip({ palette, name, selected, onPress }: { palette: Palette; n
   );
 }
 
-function HotspotBox({ h }: { h: { x0: number; y0: number; x1: number; y1: number } }) {
+function HotspotBox({ h, view }: { h: { x0: number; y0: number; x1: number; y1: number }; view: FrameView }) {
+  // The box's corners in the rotated picture.
+  const [ax, ay] = view.toView(h.x0, h.y0);
+  const [bx, by] = view.toView(h.x1, h.y1);
+  const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), y0 = Math.min(ay, by), y1 = Math.max(ay, by);
   return (
     <View
       pointerEvents="none"
       style={[
         styles.hotspot,
         {
-          left: `${(h.x0 / WIDTH) * 100}%`,
-          top: `${(h.y0 / IMAGE_ROWS) * 100}%`,
-          width: `${((h.x1 - h.x0 + 1) / WIDTH) * 100}%`,
-          height: `${((h.y1 - h.y0 + 1) / IMAGE_ROWS) * 100}%`,
+          left: `${(x0 / view.w) * 100}%`,
+          top: `${(y0 / view.h) * 100}%`,
+          width: `${((x1 - x0 + 1) / view.w) * 100}%`,
+          height: `${((y1 - y0 + 1) / view.h) * 100}%`,
         },
       ]}
     >
@@ -437,9 +462,10 @@ function HotspotBox({ h }: { h: { x0: number; y0: number; x1: number; y1: number
   );
 }
 
-function Marker({ index, kind, label }: { index: number; kind: 'hot' | 'cold' | 'spot'; label?: string }) {
-  const x = ((index % WIDTH) + 0.5) / WIDTH;
-  const y = (Math.floor(index / WIDTH) + 0.5) / IMAGE_ROWS;
+function Marker({ index, kind, label, view }: { index: number; kind: 'hot' | 'cold' | 'spot'; label?: string; view: FrameView }) {
+  const [vx, vy] = view.toView(index % WIDTH, Math.floor(index / WIDTH));
+  const x = (vx + 0.5) / view.w;
+  const y = (vy + 0.5) / view.h;
   const ring = kind === 'hot' ? '#FFFFFF' : kind === 'cold' ? colors.seriesA : ISO_RGB_CSS;
   return (
     <View pointerEvents="none" style={[styles.marker, { left: `${x * 100}%`, top: `${y * 100}%` }]}>
@@ -448,6 +474,9 @@ function Marker({ index, kind, label }: { index: number; kind: 'hot' | 'cold' | 
     </View>
   );
 }
+
+// Smoothing enlarges the 120 × 90 frame this many times (360 × 270), interpolating counts.
+const SMOOTH_SCALE = 3;
 
 const ISO_RGB_CSS = `rgb(${ISO_RGB.join(',')})`;
 

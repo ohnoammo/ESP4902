@@ -5,7 +5,7 @@ import { useDevice } from './DeviceContext';
 import { FrameStats, ThermalFrame, frameStats } from '../thermal/protocol';
 import { Calibration, Hotspot, LeakDetector, RECOMMENDED, centreCounts, countsPerC, toCelsius } from '../thermal/detect';
 import { DemoThermalSource, ThermalSource, WebUsbSource, findCb360, watchCb360 } from '../thermal/source';
-import { Palette, frameToDataUri } from '../thermal/render';
+import { Palette, Rotation, frameToDataUri } from '../thermal/render';
 import { MAX_SNAPSHOTS, ThermalEvent, uuid } from '../thermal/events';
 import { TempUnit, fmtRise, fmtTemp } from '../thermal/units';
 import { saveThermalEvent } from '../device/thermalApi';
@@ -29,9 +29,11 @@ export interface ThermalSettings {
   // Isotherm: paint everything at or above isoC in one colour (needs a calibration).
   isoOn: boolean;
   isoC: number;
+  rotation: Rotation; // clockwise, how the picture is shown (the camera's mounting)
+  smooth: boolean; // bilinear 3× enlargement instead of the raw 120 × 90 blocks
 }
 
-const DEFAULTS: ThermalSettings = { palette: 'ironRed', leakOn: true, leakThreshold: 150, highOn: false, high: 120, lowOn: false, low: -20, unit: 'C', isoOn: false, isoC: 36 }; // isotherm just above skin temperature
+const DEFAULTS: ThermalSettings = { palette: 'ironRed', leakOn: true, leakThreshold: 150, highOn: false, high: 120, lowOn: false, low: -20, unit: 'C', isoOn: false, isoC: 36, rotation: 0, smooth: true }; // isotherm just above skin temperature
 const SETTINGS_KEY = 'thermal.settings';
 const calKey = (mode: string) => `thermal.calibration.${mode}`;
 const eventsKey = (mode: string) => `thermal.events.${mode}`;
@@ -190,7 +192,7 @@ export function ThermalProvider({ children }: { children: React.ReactNode }) {
         start: alert.since,
         end: null,
         peak: null,
-        snapshot: l && snap ? frameToDataUri(l.frame.y16, snap.min, snap.max, live.current.settings.palette) : undefined,
+        snapshot: l && snap ? frameToDataUri(l.frame.y16, snap.min, snap.max, live.current.settings.palette, null, live.current.settings.rotation) : undefined,
       };
       sync(openAlert.current);
     }

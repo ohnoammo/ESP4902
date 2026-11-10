@@ -135,7 +135,6 @@ export function RunningScreen({ navigation }: NativeStackScreenProps<HomeStackPa
           <Reading value={latest && !stale ? latest.phase : '–'} unit="phase" small />
         </Reveal>
         <BandPill duty={sim.duty} note style={styles.band} />
-        <Text style={styles.unmeasured}>Tidal volume and peak pressure: not measured yet</Text>
 
       </ScrollView>
       {/* Pinned outside the scroll so it is always on screen. Never disabled: Stop must
@@ -206,7 +205,6 @@ const styles = themedStyles(() => ({
   readingValue: { ...font.mono, fontSize: fs(24), letterSpacing: -0.5, color: colors.text },
   readingSmall: { fontSize: fs(17), lineHeight: fs(31) },
   readingUnit: { ...font.regular, fontSize: fs(15), color: colors.muted, marginTop: 8 },
-  unmeasured: { ...font.regular, fontSize: fs(13), color: colors.muted, marginHorizontal: 40, marginTop: 24 },
   ended: { marginHorizontal: 40, marginTop: 24 },
   endedText: { marginTop: 8 },
   endedButton: { marginHorizontal: 0, marginTop: 24 },

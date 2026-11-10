@@ -42,41 +42,96 @@ export interface Isotherm {
   rgb: [number, number, number];
 }
 
+export type Rotation = 0 | 90 | 180 | 270; // clockwise
+
+// The picture as shown: size and mapping between camera pixels and view pixels for a rotation.
+export interface View {
+  w: number;
+  h: number;
+  toView(x: number, y: number): [number, number]; // camera pixel -> view pixel
+  fromView(vx: number, vy: number): [number, number]; // view pixel -> camera pixel
+}
+export function makeView(rot: Rotation, W: number = WIDTH, H: number = IMAGE_ROWS): View {
+  const side = rot === 90 || rot === 270;
+  return {
+    w: side ? H : W,
+    h: side ? W : H,
+    toView: (x, y) =>
+      rot === 90 ? [H - 1 - y, x] : rot === 180 ? [W - 1 - x, H - 1 - y] : rot === 270 ? [y, W - 1 - x] : [x, y],
+    fromView: (vx, vy) =>
+      rot === 90 ? [vy, H - 1 - vx] : rot === 180 ? [W - 1 - vx, H - 1 - vy] : rot === 270 ? [W - 1 - vy, vx] : [vx, vy],
+  };
+}
+
 // Raw counts → a 24-bit BMP (a format every platform's <Image> can show), stretched between
-// min and max so the full palette is used.
-export function frameToBmp(y16: Uint16Array, min: number, max: number, palette: Palette, iso?: Isotherm | null): Uint8Array {
+// min and max so the full palette is used. The frame is rotated first; with `scale` > 1 it is
+// enlarged by bilinear interpolation of the COUNTS (before colouring), which smooths the
+// 120 × 90 sensor's blocks without inventing detail.
+export function frameToBmp(
+  y16: Uint16Array,
+  min: number,
+  max: number,
+  palette: Palette,
+  iso?: Isotherm | null,
+  rot: Rotation = 0,
+  scale = 1
+): Uint8Array {
   const lut = LUTS[palette];
-  const rowBytes = WIDTH * 3; // 360, already a multiple of 4
-  const dataSize = rowBytes * IMAGE_ROWS;
+  const view = makeView(rot);
+  // Rotate into view order.
+  const src = new Float32Array(view.w * view.h);
+  for (let vy = 0; vy < view.h; vy++)
+    for (let vx = 0; vx < view.w; vx++) {
+      const [x, y] = view.fromView(vx, vy);
+      src[vy * view.w + vx] = y16[y * WIDTH + x];
+    }
+  const ow = view.w * scale;
+  const oh = view.h * scale;
+  const rowBytes = (ow * 3 + 3) & ~3; // BMP rows pad to 4 bytes
+  const dataSize = rowBytes * oh;
   const bmp = new Uint8Array(54 + dataSize);
   const dv = new DataView(bmp.buffer);
   bmp[0] = 0x42; bmp[1] = 0x4d;
   dv.setUint32(2, bmp.length, true);
   dv.setUint32(10, 54, true);
   dv.setUint32(14, 40, true);
-  dv.setInt32(18, WIDTH, true);
-  dv.setInt32(22, -IMAGE_ROWS, true); // negative height = rows stored top-down
+  dv.setInt32(18, ow, true);
+  dv.setInt32(22, -oh, true); // negative height = rows stored top-down
   dv.setUint16(26, 1, true);
   dv.setUint16(28, 24, true);
   dv.setUint32(34, dataSize, true);
   const span = Math.max(1, max - min);
-  for (let i = 0; i < y16.length; i++) {
-    const o = 54 + i * 3;
-    if (iso && y16[i] >= iso.counts) {
-      bmp[o] = iso.rgb[2]; // BMP pixels are BGR
-      bmp[o + 1] = iso.rgb[1];
-      bmp[o + 2] = iso.rgb[0];
-      continue;
+  for (let oy = 0; oy < oh; oy++) {
+    // Sample position in view pixels (pixel centres line up at any scale).
+    const fy = Math.min(view.h - 1, Math.max(0, (oy + 0.5) / scale - 0.5));
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(view.h - 1, y0 + 1);
+    const ty = fy - y0;
+    for (let ox = 0; ox < ow; ox++) {
+      const fx = Math.min(view.w - 1, Math.max(0, (ox + 0.5) / scale - 0.5));
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(view.w - 1, x0 + 1);
+      const tx = fx - x0;
+      const top = src[y0 * view.w + x0] * (1 - tx) + src[y0 * view.w + x1] * tx;
+      const bot = src[y1 * view.w + x0] * (1 - tx) + src[y1 * view.w + x1] * tx;
+      const c = top * (1 - ty) + bot * ty;
+      const o = 54 + oy * rowBytes + ox * 3;
+      if (iso && c >= iso.counts) {
+        bmp[o] = iso.rgb[2]; // BMP pixels are BGR
+        bmp[o + 1] = iso.rgb[1];
+        bmp[o + 2] = iso.rgb[0];
+        continue;
+      }
+      const v = Math.max(0, Math.min(255, Math.round(((c - min) / span) * 255))) * 3;
+      bmp[o] = lut[v + 2];
+      bmp[o + 1] = lut[v + 1];
+      bmp[o + 2] = lut[v];
     }
-    const v = Math.max(0, Math.min(255, Math.round(((y16[i] - min) / span) * 255))) * 3;
-    bmp[o] = lut[v + 2];
-    bmp[o + 1] = lut[v + 1];
-    bmp[o + 2] = lut[v];
   }
   return bmp;
 }
 
 export const bmpToDataUri = (bmp: Uint8Array) => `data:image/bmp;base64,${base64(bmp)}`;
 
-export const frameToDataUri = (y16: Uint16Array, min: number, max: number, palette: Palette, iso?: Isotherm | null) =>
-  bmpToDataUri(frameToBmp(y16, min, max, palette, iso));
+export const frameToDataUri = (y16: Uint16Array, min: number, max: number, palette: Palette, iso?: Isotherm | null, rot: Rotation = 0) =>
+  bmpToDataUri(frameToBmp(y16, min, max, palette, iso, rot));
