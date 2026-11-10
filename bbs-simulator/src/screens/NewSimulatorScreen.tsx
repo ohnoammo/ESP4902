@@ -1,12 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, LinkText, PrimaryButton, Screen, useTopInset } from '../components/basics';
 import { SegmentedToggle, Slider } from '../components/controls';
-import { BandPill } from '../components/BandPill';
 import { statusColor } from '../components/ActivityPresets';
-import { flowCheck, flowPeakDuty, PEAK_STATUS_LABEL, VT_RANGE } from '../constants/twin';
+import { flowAtDuty, flowCheck, flowPeakDuty, PEAK_STATUS_LABEL, rpmAtDuty, VT_RANGE } from '../constants/twin';
 import { HomeStackParams } from '../navigation/types';
 import { useData } from '../state/DataContext';
 import { fs, colors, font, themedStyles, type } from '../theme';
@@ -155,7 +154,8 @@ export function NewSimulatorScreen({ navigation, route }: NativeStackScreenProps
             </Text>
             <Setting label="Duty" value={`${duty} %`}>
               <Slider {...RANGES.freeDuty} value={duty} onChange={setDuty} accessibilityLabel="Duty" />
-              <BandPill duty={duty} note style={styles.band} />
+              <DutyInput duty={duty} onChange={setDuty} />
+              <FreeFlowEstimate duty={duty} fan={fan} />
             </Setting>
             </>
           )}
@@ -169,6 +169,56 @@ export function NewSimulatorScreen({ navigation, route }: NativeStackScreenProps
         />
       </KeyboardAvoidingView>
     </Screen>
+  );
+}
+
+// Type an exact duty (whole %, 0–100), as well as dragging the slider. Out-of-range or partial
+// entries are kept as typed and only applied once valid.
+function DutyInput({ duty, onChange }: { duty: number; onChange: (d: number) => void }) {
+  const [text, setText] = useState(String(duty));
+  useEffect(() => {
+    if (Number(text) !== duty) setText(String(duty));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [duty]);
+  const n = Number(text);
+  const ok = text.trim() !== '' && Number.isInteger(n) && n >= DUTY_RANGE.min && n <= DUTY_RANGE.max;
+  return (
+    <View style={styles.dutyRow}>
+      <Text style={styles.settingLabel}>Exact duty</Text>
+      <Field
+        value={text}
+        onChangeText={(t) => {
+          const clean = t.replace(/[^0-9]/g, '').slice(0, 3);
+          setText(clean);
+          const v = Number(clean);
+          if (clean !== '' && v >= DUTY_RANGE.min && v <= DUTY_RANGE.max) onChange(v);
+        }}
+        keyboardType="number-pad"
+        returnKeyType="done"
+        maxLength={3}
+        style={styles.dutyField}
+        accessibilityLabel="Exact duty, percent"
+      />
+      <Text style={styles.settingValue}>%</Text>
+      {!ok && <Text style={styles.settingNote}>Enter a whole number from 0 to 100.</Text>}
+    </View>
+  );
+}
+
+// What the installed calibration expects from the chosen fan at this duty (replaces the old
+// open-air duty bands, which were for the single blower).
+function FreeFlowEstimate({ duty, fan }: { duty: number; fan: FanSide }) {
+  const q = flowAtDuty(duty, fan);
+  const rpm = rpmAtDuty(duty, fan);
+  return (
+    <Text style={styles.settingNote}>
+      {duty === 0
+        ? 'Fan off.'
+        : `Expected about ${formatNumber(q, 1)} L/min at ${formatNumber(rpm, 0)} rpm (${fan} fan, installed calibration).`}
+      {duty > 0 && duty < 25
+        ? ' Below 25 % is outside the calibration: from rest the fan kicks at 25 % for 1 s, then holds this duty, and may stall (fault 1).'
+        : ''}
+    </Text>
   );
 }
 
@@ -196,6 +246,8 @@ const styles = themedStyles(() => ({
   settingValue: { ...font.bold, fontSize: fs(15), color: colors.text },
   settingNote: { ...font.regular, fontSize: fs(13), color: colors.muted, marginTop: 8 },
   band: { marginTop: 12 },
+  dutyRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 12 },
+  dutyField: { width: 84, textAlign: 'right', fontVariant: ['tabular-nums'] },
   flowBox: { marginTop: 24, padding: 16, borderRadius: 16, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder, gap: 8 },
   flowRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   peakValue: { ...font.monoBold, fontSize: fs(18), color: colors.accentText },
