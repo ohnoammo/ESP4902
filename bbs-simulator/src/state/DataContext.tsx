@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { supabaseConfigured } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppMode, Folder, Phase, RunDetails, Sample, SessionMeta, SimMode, Simulator } from '../types';
 import { BPM_RANGE, DEVICE_ID, DUTY_RANGE, IE_RANGE, PHASES } from '../device';
@@ -234,7 +235,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         alive = false;
       };
     }
-    // Live runs: the list from Supabase, then every insert/update via Realtime.
+    // Live runs: the list from Supabase, then every insert/update via Realtime. Without a .env
+    // there is no Supabase: say so instead of crashing (demo mode still works).
+    if (!supabaseConfigured) {
+      setSyncError('Supabase is not configured: add bbs-simulator/.env (see .env.example) and restart, or use demo mode.');
+      return () => {
+        alive = false;
+      };
+    }
     listRuns()
       .then((runs) => alive && setRemote(runs))
       .catch((e) => alive && setSyncError(`Couldn't load runs: ${e instanceof Error ? e.message : String(e)}`));
