@@ -1,0 +1,32 @@
+# Final firmware + app update (Nov 2026)
+
+## Firmware: `firmware/esp4902_final/` (final-1.0-twin)
+- v4's Supabase/WiFi/FreeRTOS sketch with the two-fan installed-calibration control loop from
+  `twin_installed_breathing.ino` (built in an earlier session).
+- Fixed in this commit: comments said the default preset was `demo_low`; it is `demo_15`.
+  Added `SEND_PRESSURE` so the firmware can run before the pressure migration is applied.
+
+## App (`bbs-simulator/`)
+- **Twin model** (`src/constants/twin.ts`): the installed calibration replaces the old
+  operating points. Capacity: exhale 17.3 L/min, inhale 105.1 L/min.
+- **Presets**: Demo (15 L/min), Walking slow / fast, Light exercise female / male: the
+  firmware's ids, started by name (`{"mode":"flow","preset":"walk_slow"}`).
+- **Custom breath editor**: peak = π·Vt·f; warns (never blocks) above 17 L/min (exhale) or
+  105 L/min (inhale). Vt range 0.1–2.5 L, as the firmware.
+- **Digital twin page**: signed target and estimated airflow on the same axes over the last
+  15 s (+ inhale, − exhale), labelled "Estimated airflow (installed calibration)".
+- **Fault banner** (app-wide, under the demo strip, never over Stop): fault 3 "Exhale target
+  above simulator capacity: peaks are being clipped." (or inhale, if > 105 L/min); faults 1
+  and 2 with short messages. Held 5 s so it doesn't flash every breath; dismissable per run.
+- **Sensors**: BME280 temperature, humidity and ambient pressure (live screen and run chips).
+- **CSV export**: inhale and exhale fan rpm, target flow and estimated airflow (1 s means,
+  signed), highest fault per second, ambient pressure.
+- **Demo mode**: simulates the final firmware (two fans, 0.2 s lead, KP feedback, trim,
+  faults, 10-breath runs, BME280). Clipped presets show fault 3 at their exhale peaks.
+- Starting a free-flow or duty-breath simulator is blocked on `final-…` firmware.
+
+## Supabase
+- `supabase/migrations/20261111_final_pressure.sql`: adds `telemetry.pressure_hpa` and
+  updates column comments. **Not applied.** Apply before flashing the final firmware.
+- `20261106_flow_runs.sql` is still not applied, so flow runs are not saved as `runs` rows
+  (unchanged; the app says so).

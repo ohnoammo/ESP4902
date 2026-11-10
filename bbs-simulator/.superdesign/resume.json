@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "projectId": "deff8926-97e1-4069-afd4-9eef13e7d79e",
+  "canvas": "https://superdesign.dev/teams/2e933b2a-3e84-4e92-88f7-c07dea850bcd/projects/deff8926-97e1-4069-afd4-9eef13e7d79e",
+  "targets": {
+    "Home/NewSimulator": {
+      "baselineDraftId": "ad9e73bd-553a-4332-9df4-d2132b55444f",
+      "activeDraftId": "1388252c-0b7a-444d-acb5-2ee41778463b",
+      "branches": [
+        { "draftId": "1388252c-0b7a-444d-acb5-2ee41778463b", "description": "A: vertical list of 4 selectable preset cards (Walking, Light, Medium, Custom) with rate/peak-flow stat rows; v2 adds expanded 'How were these presets chosen?' dropdown with B's bpm range chart (SELECTED)" },
+        { "draftId": "3b5fa3b6-7ab6-44d3-93da-d0c6bed27271", "description": "B: 2x2 preset tiles + 'Typical human breathing' bpm-axis range chart and peak-flow/band table" }
+      ],
+      "model": "gemini-3.1-pro",
+      "device": "mobile",
+      "components": [],
+      "contextFiles": [".superdesign/design-system.md", "src/screens/NewSimulatorScreen.tsx", "src/components/basics.tsx", "src/components/controls.tsx", "src/components/BandPill.tsx", "src/constants/dutyBands.ts", "src/components/AppBanners.tsx", ".superdesign/init/theme.md"]
+    }
+  }
+}
